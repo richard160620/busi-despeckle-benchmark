@@ -8,6 +8,7 @@ ISP Characteristics (W6):
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +48,11 @@ class _LightUNet(nn.Module):
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool(e1))
         b = self.bottleneck(self.pool(e2))
-        d2 = self.dec2(torch.cat([self.up2(b), e2], dim=1))
-        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
+        # Interpolate before cat to handle odd spatial dims (skip-connection size mismatch)
+        up2 = F.interpolate(self.up2(b), size=e2.shape[-2:], mode='bilinear', align_corners=False)
+        d2 = self.dec2(torch.cat([up2, e2], dim=1))
+        up1 = F.interpolate(self.up1(d2), size=e1.shape[-2:], mode='bilinear', align_corners=False)
+        d1 = self.dec1(torch.cat([up1, e1], dim=1))
         return torch.sigmoid(self.out_conv(d1))
 
 
@@ -95,12 +99,20 @@ def predict(model, image):
         img = img / 255.0
 
     h, w = img.shape
-    tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+
+    # Pad H and W to next multiple of 16 so encoder/decoder strides never mismatch
+    pad_h = (16 - h % 16) % 16
+    pad_w = (16 - w % 16) % 16
+    if pad_h or pad_w:
+        img = np.pad(img, ((0, pad_h), (0, pad_w)), mode='reflect')
+
+    tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0)  # (1,1,H_pad,W_pad)
 
     with torch.no_grad():
-        prob = model(tensor)  # (1,1,H,W)
+        prob = model(tensor)  # (1,1,H_pad,W_pad)
 
-    return prob.squeeze().numpy().astype(np.float32)
+    # Crop back to original spatial size before returning
+    return prob.squeeze().numpy().astype(np.float32)[:h, :w]
 
 
 def postprocess_mask(prob_map, threshold=0.5):

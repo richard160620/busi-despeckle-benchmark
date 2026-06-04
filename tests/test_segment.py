@@ -174,3 +174,32 @@ class TestPostprocessParametrize:
         prob = np.full(shape, 0.5, dtype=np.float32)
         with pytest.raises(ValueError):
             postprocess_mask(prob, threshold=threshold)
+
+
+# ===========================================================================
+# REGRESSION — odd-sized inputs must not raise and must preserve shape (W14)
+#
+# Bug: POST /segment returned 500 with RuntimeError on skip-connection concat
+# when H or W is not a multiple of 16.  Fixed by:
+#   1. F.interpolate before each torch.cat in _LightUNet.forward()
+#   2. Padding input to a multiple of 16 in predict(), cropped back after.
+# ===========================================================================
+
+@pytest.mark.regression
+@pytest.mark.parametrize("h,w", [
+    (307, 306),
+    (101, 97),
+    (33, 31),
+])
+def test_odd_sized_input_shape_preserved(h, w):
+    """W14 Regression: predict() output shape == (H, W) for any odd-sized input.
+
+    Pins the fix for the skip-connection size mismatch that caused 500 errors
+    on inputs whose height or width is not a multiple of 16.
+    """
+    model = build_model()
+    img = np.random.default_rng(42).random((h, w)).astype(np.float32)
+    result = predict(model, img)
+    assert result.shape == (h, w), (
+        f"Expected output shape ({h}, {w}), got {result.shape}"
+    )
