@@ -5,6 +5,9 @@ ISP Characteristics (W6):
   C2 - data distribution: {identical, slightly different, very different}
   C3 - correction method: {bonferroni, fdr_bh, none}
 """
+import numpy as np
+from scipy.stats import wilcoxon, friedmanchisquare
+from statsmodels.stats.multitest import multipletests
 
 
 def wilcoxon_compare(a, b):
@@ -19,7 +22,25 @@ def wilcoxon_compare(a, b):
     Raises:
         ValueError: if len(a) != len(b) or len(a) < 4.
     """
-    raise NotImplementedError
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+
+    if len(a) != len(b):
+        raise ValueError(
+            f"Arrays must have equal length, got {len(a)} and {len(b)}"
+        )
+    if len(a) < 4:
+        raise ValueError(
+            f"At least 4 samples required, got {len(a)}"
+        )
+
+    diff = a - b
+    if np.all(diff == 0):
+        # All differences zero: no evidence of difference, p = 1.0
+        return 0.0, 1.0
+
+    result = wilcoxon(a, b)
+    return float(result.statistic), float(result.pvalue)
 
 
 def friedman_test(*groups):
@@ -34,7 +55,19 @@ def friedman_test(*groups):
     Raises:
         ValueError: if fewer than 2 groups or unequal lengths.
     """
-    raise NotImplementedError
+    if len(groups) < 2:
+        raise ValueError(
+            f"At least 2 groups required, got {len(groups)}"
+        )
+    groups = [np.asarray(g, dtype=float) for g in groups]
+    lengths = [len(g) for g in groups]
+    if len(set(lengths)) != 1:
+        raise ValueError(
+            f"All groups must have equal length, got lengths {lengths}"
+        )
+
+    result = friedmanchisquare(*groups)
+    return float(result.statistic), float(result.pvalue)
 
 
 def correct_pvalues(pvalues, method="bonferroni"):
@@ -50,7 +83,13 @@ def correct_pvalues(pvalues, method="bonferroni"):
     Raises:
         ValueError: unsupported method.
     """
-    raise NotImplementedError
+    if method not in ("bonferroni", "fdr_bh"):
+        raise ValueError(
+            f"Unsupported correction method '{method}'. "
+            f"Choose 'bonferroni' or 'fdr_bh'."
+        )
+    _, corrected, _, _ = multipletests(pvalues, method=method)
+    return list(corrected)
 
 
 def make_result_table(records):
@@ -62,4 +101,4 @@ def make_result_table(records):
     Returns:
         Same list sorted by method then label.
     """
-    raise NotImplementedError
+    return sorted(records, key=lambda r: (r.get("method", ""), r.get("label", "")))
