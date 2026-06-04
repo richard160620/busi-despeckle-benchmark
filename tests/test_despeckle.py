@@ -94,3 +94,81 @@ class TestDespeckleDtype:
         """ISP: none method with uint8 preserves exact values."""
         out = despeckle(tiny_image, method="none")
         np.testing.assert_array_equal(out, tiny_image)
+
+
+# ===========================================================================
+# PARAMETRIZED MATRIX — ISP W6 full expansion
+#
+# Characteristics:
+#   C1 – method:       {none, median, lee, frost, srad, nlm}           6 blocks
+#   C2 – kernel_size:  {1, 3, 5, 7}   (valid odd positives)            4 blocks
+#   C3 – image shape:  {(8,8)=small-sq, (16,16)=med-sq,                4 blocks
+#                       (32,32)=large-sq, (8,16)=non-sq}
+#   C4 – dtype:        {uint8, float32, float64}                        3 blocks
+#
+# Valid combinations: 6 × 4 × 4 × 3 = 288 tests
+# Invalid kernel combinations (BVA): 5 methods × 6 invalid values = 30 tests
+# Total new parametrized tests: 318
+# ===========================================================================
+import itertools as _it
+
+_PM_METHODS = ["none", "median", "lee", "frost", "srad", "nlm"]
+_PM_VALID_KERNELS = [1, 3, 5, 7]
+# C3: small-square / medium-square / large-square / non-square
+_PM_SHAPES = [(8, 8), (16, 16), (32, 32), (8, 16)]
+_PM_DTYPES = [np.uint8, np.float32, np.float64]
+# BVA: zero, negative, two negatives, even numbers
+_PM_INVALID_KERNELS = [0, -1, -3, 2, 4, 6]
+# none skips window validation; all others must raise on invalid kernel
+_PM_WINDOWED_METHODS = ["median", "lee", "frost", "srad", "nlm"]
+
+
+def _make_test_image(shape, dtype, seed=0):
+    rng = np.random.default_rng(seed)
+    if np.issubdtype(dtype, np.floating):
+        return rng.random(shape).astype(dtype)
+    return rng.integers(0, 256, shape, dtype=dtype)
+
+
+class TestDespeckleParametrize:
+    """ISP W6: C1 × C2 × C3 × C4 full matrix — 288 valid + 30 BVA invalid."""
+
+    # ------------------------------------------------------------------
+    # Valid combinations (288 tests)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "method,kernel,shape,dtype",
+        list(_it.product(_PM_METHODS, _PM_VALID_KERNELS, _PM_SHAPES, _PM_DTYPES)),
+    )
+    def test_output_shape_preserved(self, method, kernel, shape, dtype):
+        """ISP C1-C4: valid input → output shape == input shape."""
+        img = _make_test_image(shape, dtype)
+        out = despeckle(img, method=method, window_size=kernel)
+        assert out.shape == shape
+
+    @pytest.mark.parametrize(
+        "method,kernel,shape,dtype",
+        list(_it.product(_PM_METHODS, _PM_VALID_KERNELS, _PM_SHAPES, _PM_DTYPES)),
+    )
+    def test_output_dtype_preserved(self, method, kernel, shape, dtype):
+        """ISP C4: valid input → output dtype == input dtype."""
+        img = _make_test_image(shape, dtype)
+        out = despeckle(img, method=method, window_size=kernel)
+        assert out.dtype == dtype
+
+    # ------------------------------------------------------------------
+    # BVA: invalid kernel sizes (30 tests)
+    # C2 boundaries: 0 (below min), negative, even
+    # none method is excluded — it returns before window validation
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "method,kernel",
+        list(_it.product(_PM_WINDOWED_METHODS, _PM_INVALID_KERNELS)),
+    )
+    def test_invalid_kernel_raises_value_error(self, method, kernel):
+        """BVA W6: kernel ∈ {0,-1,-3,2,4,6} → ValueError for windowed methods."""
+        img = np.random.default_rng(1).random((8, 8)).astype(np.float32)
+        with pytest.raises(ValueError):
+            despeckle(img, method=method, window_size=kernel)

@@ -115,3 +115,62 @@ class TestBuildModel:
         result = predict(model, tiny_image_float)
         assert result.min() >= 0.0
         assert result.max() <= 1.0
+
+
+# ===========================================================================
+# PARAMETRIZED MATRIX — ISP W6 full expansion for postprocess_mask
+#
+# Characteristics:
+#   C1 – image shape:   {(4,4),(8,8),(16,16),(32,32),(8,16),(16,8)}   6 blocks
+#   C2 – threshold:     {0.0, 0.1, 0.2, 0.3, 0.4, 0.5,               11 blocks
+#                         0.6, 0.7, 0.8, 0.9, 1.0}
+#   C3 – prob value:    {0.0, 0.25, 0.5, 0.75, 1.0}                   5 blocks
+#
+# Valid combinations: 6 × 11 × 5 = 330 tests
+# BVA invalid threshold: 3 shapes × 4 invalid values = 12 tests
+# Total new parametrized: 342
+# ===========================================================================
+import itertools as _it3
+
+_PS_SHAPES = [(4, 4), (8, 8), (16, 16), (32, 32), (8, 16), (16, 8)]
+# C2: threshold at 0 (include all), step through mid range, 1.0 (strict)
+_PS_THRESHOLDS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+# C3: prob_value at boundary (0), quarter marks, and boundary (1)
+_PS_PROB_VALUES = [0.0, 0.25, 0.5, 0.75, 1.0]
+# BVA: outside [0,1]
+_PS_INVALID_THRESHOLDS = [-0.1, -1.0, 1.1, 2.0]
+_PS_SHAPES_SMALL = [(4, 4), (8, 8), (16, 16)]
+
+
+class TestPostprocessParametrize:
+    """ISP W6 C1 × C2 × C3 — 330 valid + 12 BVA invalid = 342 tests."""
+
+    # Valid combinations: constant probability map (330 tests)
+    # Each combination tests a specific (shape, threshold, prob_value) block.
+    # Expected output: mask is all-True if prob_val >= threshold, else all-False.
+    @pytest.mark.parametrize(
+        "shape,threshold,prob_val",
+        list(_it3.product(_PS_SHAPES, _PS_THRESHOLDS, _PS_PROB_VALUES)),
+    )
+    def test_constant_prob_correct_output(self, shape, threshold, prob_val):
+        """ISP C1-C3: constant prob map → all-True or all-False per threshold."""
+        prob = np.full(shape, prob_val, dtype=np.float32)
+        mask = postprocess_mask(prob, threshold=threshold)
+        expected = bool(prob_val >= threshold)
+        assert mask.dtype == bool
+        assert mask.shape == shape
+        if expected:
+            assert mask.all(), f"Expected all True for prob={prob_val}, thr={threshold}"
+        else:
+            assert not mask.any(), f"Expected all False for prob={prob_val}, thr={threshold}"
+
+    # BVA: invalid threshold → ValueError (12 tests)
+    @pytest.mark.parametrize(
+        "shape,threshold",
+        list(_it3.product(_PS_SHAPES_SMALL, _PS_INVALID_THRESHOLDS)),
+    )
+    def test_invalid_threshold_raises(self, shape, threshold):
+        """BVA W6: threshold outside [0,1] → ValueError."""
+        prob = np.full(shape, 0.5, dtype=np.float32)
+        with pytest.raises(ValueError):
+            postprocess_mask(prob, threshold=threshold)

@@ -230,3 +230,160 @@ class TestIsResultValid:
     # Additional clause coverage
     def test_all_false_returns_false(self):
         assert is_result_valid(False, False, False, False) is False
+
+
+# ===========================================================================
+# PARAMETRIZED MATRIX — ISP W6 full expansion for metrics
+#
+# Characteristics (dice / iou):
+#   C1 – pred content:   {empty, full, top_half, left_half,              6 blocks
+#                          single_pixel, checkerboard}
+#   C2 – target content: same 6 blocks
+#   C3 – image shape:    {(4,4), (8,8), (16,16), (8,16)}               4 blocks
+#
+# Valid range tests (dice):  6 × 6 × 4 = 144
+# Self-identity tests:        6 × 4     =  24
+# Nonempty-vs-empty tests:    5 × 4     =  20  (pred_nonempty vs empty target)
+# Symmetry tests (iou):      6 × 6 × 4 = 144
+# hd95 non-negative:         4 × 4 × 4 =  64
+# Shape-mismatch raises:      3 funcs × 6 pairs = 18
+# Total new parametrized:  ≈ 414
+# ===========================================================================
+import itertools as _it2
+
+_MT_SHAPES = [(4, 4), (8, 8), (16, 16), (8, 16)]
+_MT_FILL_TYPES = ["empty", "full", "top_half", "left_half", "single_pixel", "checkerboard"]
+_MT_NONEMPTY = ["full", "top_half", "left_half", "single_pixel", "checkerboard"]
+_MT_HD95_FILLS = ["empty", "full", "top_half", "single_pixel"]
+_MT_MISMATCH_PAIRS = [
+    ((4, 4), (4, 5)), ((8, 8), (4, 8)), ((16, 16), (8, 16)),
+    ((4, 4), (8, 8)), ((8, 8), (16, 16)), ((4, 8), (8, 4)),
+]
+
+
+def _mt_make_mask(shape, fill_type):
+    """Build a boolean mask of given shape and fill type (ISP C1/C2)."""
+    h, w = shape
+    m = np.zeros(shape, dtype=bool)
+    if fill_type == "empty":
+        pass
+    elif fill_type == "full":
+        m[:] = True
+    elif fill_type == "top_half":
+        m[: h // 2, :] = True
+    elif fill_type == "left_half":
+        m[:, : w // 2] = True
+    elif fill_type == "single_pixel":
+        m[0, 0] = True
+    elif fill_type == "checkerboard":
+        m[::2, ::2] = True
+        m[1::2, 1::2] = True
+    return m
+
+
+class TestDiceParametrize:
+    """ISP W6 — parametrized dice tests."""
+
+    # C1 × C3: dice(mask, mask) == 1.0 for all mask types and shapes (24 tests)
+    @pytest.mark.parametrize(
+        "shape,fill",
+        list(_it2.product(_MT_SHAPES, _MT_FILL_TYPES)),
+    )
+    def test_dice_self_identity(self, shape, fill):
+        """ISP C1/C3: dice(m, m) == 1.0 for any mask type and shape."""
+        m = _mt_make_mask(shape, fill)
+        assert dice(m, m) == pytest.approx(1.0)
+
+    # C1 × C3: dice(nonempty, empty) == 0.0 (20 tests, called once each direction)
+    @pytest.mark.parametrize(
+        "shape,fill",
+        list(_it2.product(_MT_SHAPES, _MT_NONEMPTY)),
+    )
+    def test_dice_nonempty_vs_empty_is_zero(self, shape, fill):
+        """ISP C1/C2/C3: dice(nonempty, empty) == 0.0."""
+        m = _mt_make_mask(shape, fill)
+        e = _mt_make_mask(shape, "empty")
+        assert dice(m, e) == pytest.approx(0.0)
+
+    # C1 × C2 × C3: dice in [0,1] for all pred × target pairs (144 tests)
+    @pytest.mark.parametrize(
+        "shape,fill_a,fill_b",
+        list(_it2.product(_MT_SHAPES, _MT_FILL_TYPES, _MT_FILL_TYPES)),
+    )
+    def test_dice_range(self, shape, fill_a, fill_b):
+        """ISP C1-C3: dice(a, b) ∈ [0, 1] for all mask combinations."""
+        a = _mt_make_mask(shape, fill_a)
+        b = _mt_make_mask(shape, fill_b)
+        val = dice(a, b)
+        assert 0.0 <= val <= 1.0
+
+
+class TestIoUParametrize:
+    """ISP W6 — parametrized iou tests."""
+
+    # Self-identity (24 tests)
+    @pytest.mark.parametrize(
+        "shape,fill",
+        list(_it2.product(_MT_SHAPES, _MT_FILL_TYPES)),
+    )
+    def test_iou_self_identity(self, shape, fill):
+        """ISP C1/C3: iou(m, m) == 1.0."""
+        m = _mt_make_mask(shape, fill)
+        assert iou(m, m) == pytest.approx(1.0)
+
+    # Nonempty vs empty (20 tests)
+    @pytest.mark.parametrize(
+        "shape,fill",
+        list(_it2.product(_MT_SHAPES, _MT_NONEMPTY)),
+    )
+    def test_iou_nonempty_vs_empty_is_zero(self, shape, fill):
+        """ISP C1/C2/C3: iou(nonempty, empty) == 0.0."""
+        m = _mt_make_mask(shape, fill)
+        e = _mt_make_mask(shape, "empty")
+        assert iou(m, e) == pytest.approx(0.0)
+
+    # Symmetry: iou(a,b) == iou(b,a) (144 tests)
+    @pytest.mark.parametrize(
+        "shape,fill_a,fill_b",
+        list(_it2.product(_MT_SHAPES, _MT_FILL_TYPES, _MT_FILL_TYPES)),
+    )
+    def test_iou_symmetry(self, shape, fill_a, fill_b):
+        """ISP C1-C3: iou is symmetric."""
+        a = _mt_make_mask(shape, fill_a)
+        b = _mt_make_mask(shape, fill_b)
+        assert iou(a, b) == pytest.approx(iou(b, a))
+
+
+class TestHD95Parametrize:
+    """ISP W6 — parametrized hd95 tests."""
+
+    # hd95 >= 0 for all pairs (64 tests)
+    @pytest.mark.parametrize(
+        "shape,fill_a,fill_b",
+        list(_it2.product(_MT_SHAPES, _MT_HD95_FILLS, _MT_HD95_FILLS)),
+    )
+    def test_hd95_non_negative(self, shape, fill_a, fill_b):
+        """ISP C1-C3: hd95(a, b) >= 0 for all valid inputs."""
+        a = _mt_make_mask(shape, fill_a)
+        b = _mt_make_mask(shape, fill_b)
+        val = hd95(a, b)
+        assert val >= 0.0
+
+
+class TestShapeMismatchParametrize:
+    """BVA: shape mismatch raises ValueError for dice, iou, hd95 (18 tests)."""
+
+    @pytest.mark.parametrize(
+        "func,shape_a,shape_b",
+        [
+            (f, sa, sb)
+            for f in [dice, iou, hd95]
+            for sa, sb in _MT_MISMATCH_PAIRS
+        ],
+    )
+    def test_shape_mismatch_raises(self, func, shape_a, shape_b):
+        """BVA W6: mismatched shapes → ValueError."""
+        a = np.zeros(shape_a, dtype=bool)
+        b = np.zeros(shape_b, dtype=bool)
+        with pytest.raises(ValueError):
+            func(a, b)
