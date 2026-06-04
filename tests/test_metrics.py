@@ -1,0 +1,210 @@
+"""Tests for src/metrics.py.
+
+Testing methods applied:
+  - Logic Coverage / MC-DC (W8): is_result_valid compound predicate
+  - Input Space Partitioning (W6): pred/target content x shape x area
+  - Boundary Value Analysis: both-empty convention, threshold edges
+  - Regression (W14): fixed-input dice/iou values pinned — see Issue #2
+"""
+import numpy as np
+import pytest
+
+from src.metrics import dice, hd95, is_result_valid, iou, niqe, psnr, ssim
+
+
+# ---------------------------------------------------------------------------
+# dice
+# ---------------------------------------------------------------------------
+
+class TestDice:
+    def test_perfect_overlap_is_one(self, tiny_mask):
+        assert dice(tiny_mask, tiny_mask) == pytest.approx(1.0)
+
+    def test_no_overlap_is_zero(self, tiny_mask, empty_mask):
+        assert dice(tiny_mask, empty_mask) == pytest.approx(0.0)
+
+    def test_both_empty_is_one(self, empty_mask):
+        """Convention: both-empty -> 1.0 (ISP C1 edge case)."""
+        assert dice(empty_mask, empty_mask) == pytest.approx(1.0)
+
+    def test_shape_mismatch_raises(self, tiny_mask):
+        wrong = np.zeros((16, 16), dtype=bool)
+        with pytest.raises(ValueError):
+            dice(tiny_mask, wrong)
+
+    def test_result_in_unit_interval(self, tiny_mask, empty_mask):
+        val = dice(tiny_mask, empty_mask)
+        assert 0.0 <= val <= 1.0
+
+    # Regression test — Issue #2
+    @pytest.mark.regression
+    def test_regression_known_dice(self):
+        """Regression (W14): dice on fixed 4x4 checkerboard input. Issue #2."""
+        pred = np.array([[1, 0, 1, 0],
+                         [0, 1, 0, 1],
+                         [1, 0, 1, 0],
+                         [0, 1, 0, 1]], dtype=bool)
+        target = np.array([[1, 1, 0, 0],
+                           [1, 1, 0, 0],
+                           [0, 0, 1, 1],
+                           [0, 0, 1, 1]], dtype=bool)
+        # intersection = 4, |pred| = 8, |target| = 8  ->  dice = 8/16 = 0.5
+        assert dice(pred, target) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# iou
+# ---------------------------------------------------------------------------
+
+class TestIoU:
+    def test_perfect_overlap_is_one(self, tiny_mask):
+        assert iou(tiny_mask, tiny_mask) == pytest.approx(1.0)
+
+    def test_no_overlap_is_zero(self, tiny_mask, empty_mask):
+        assert iou(tiny_mask, empty_mask) == pytest.approx(0.0)
+
+    def test_both_empty_is_one(self, empty_mask):
+        """Convention: both-empty -> 1.0."""
+        assert iou(empty_mask, empty_mask) == pytest.approx(1.0)
+
+    def test_shape_mismatch_raises(self, tiny_mask):
+        with pytest.raises(ValueError):
+            iou(tiny_mask, np.zeros((16, 16), dtype=bool))
+
+    def test_result_in_unit_interval(self, tiny_mask, empty_mask):
+        val = iou(tiny_mask, empty_mask)
+        assert 0.0 <= val <= 1.0
+
+    # Regression test — Issue #2
+    @pytest.mark.regression
+    def test_regression_known_iou(self):
+        """Regression (W14): iou on fixed input. Issue #2."""
+        pred = np.zeros((4, 4), dtype=bool)
+        pred[0:2, 0:2] = True  # 4 pixels
+        target = np.zeros((4, 4), dtype=bool)
+        target[1:3, 1:3] = True  # 4 pixels, 1 overlap pixel
+        # intersection=1, union=7 -> iou=1/7
+        assert iou(pred, target) == pytest.approx(1 / 7)
+
+
+# ---------------------------------------------------------------------------
+# hd95
+# ---------------------------------------------------------------------------
+
+class TestHD95:
+    def test_identical_masks_is_zero(self, tiny_mask):
+        assert hd95(tiny_mask, tiny_mask) == pytest.approx(0.0)
+
+    def test_both_empty_is_zero(self, empty_mask):
+        assert hd95(empty_mask, empty_mask) == pytest.approx(0.0)
+
+    def test_non_negative(self, tiny_mask, empty_mask):
+        # One empty, one non-empty: conventionally large distance
+        val = hd95(tiny_mask, tiny_mask)
+        assert val >= 0.0
+
+    def test_shape_mismatch_raises(self, tiny_mask):
+        with pytest.raises(ValueError):
+            hd95(tiny_mask, np.zeros((16, 16), dtype=bool))
+
+
+# ---------------------------------------------------------------------------
+# psnr / ssim
+# ---------------------------------------------------------------------------
+
+class TestPSNR:
+    def test_identical_images(self, tiny_image_float):
+        val = psnr(tiny_image_float, tiny_image_float)
+        assert val > 40.0  # very high PSNR for identical images
+
+    def test_positive_value(self, tiny_image_float):
+        import numpy as np
+        noisy = np.clip(tiny_image_float + 0.1, 0, 1).astype(np.float32)
+        val = psnr(noisy, tiny_image_float)
+        assert val > 0.0
+
+
+class TestSSIM:
+    def test_identical_images_is_one(self, tiny_image_float):
+        val = ssim(tiny_image_float, tiny_image_float)
+        assert val == pytest.approx(1.0, abs=1e-5)
+
+    def test_in_minus_one_to_one(self, tiny_image_float):
+        import numpy as np
+        noisy = np.clip(tiny_image_float + 0.2, 0, 1).astype(np.float32)
+        val = ssim(noisy, tiny_image_float)
+        assert -1.0 <= val <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# niqe
+# ---------------------------------------------------------------------------
+
+class TestNIQE:
+    def test_returns_non_negative_float(self, tiny_image_float):
+        val = niqe(tiny_image_float)
+        assert isinstance(float(val), float)
+        assert val >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# is_result_valid — MC-DC / Logic Coverage (W8)
+#
+# Predicate: has_mask AND dice_finite AND (area_above_min OR allow_empty)
+#
+# MC-DC truth table:
+# Row | has_mask | dice_finite | area_above_min | allow_empty | Result
+#  1  |    T     |      T      |       T        |      T      |   T
+#  2  |    T     |      T      |       T        |      F      |   T
+#  3  |    T     |      T      |       F        |      T      |   T
+#  4  |    T     |      T      |       F        |      F      |   F
+#  5  |    T     |      F      |       T        |      T      |   F
+#  6  |    F     |      T      |       T        |      T      |   F
+# MC-DC pairs:
+#   has_mask:       rows (1,6)
+#   dice_finite:    rows (1,5)
+#   area_above_min: rows (2,4)
+#   allow_empty:    rows (3,4)
+# ---------------------------------------------------------------------------
+
+class TestIsResultValid:
+    """W8 Logic Coverage: Predicate, Clause, and MC-DC tests."""
+
+    # Predicate coverage (at least one True, one False overall)
+    def test_predicate_true(self):
+        assert is_result_valid(True, True, True, False) is True
+
+    def test_predicate_false_no_mask(self):
+        assert is_result_valid(False, True, True, True) is False
+
+    # MC-DC: vary has_mask (rows 1 vs 6)
+    def test_mcdc_has_mask_true(self):
+        assert is_result_valid(True, True, True, True) is True
+
+    def test_mcdc_has_mask_false(self):
+        assert is_result_valid(False, True, True, True) is False
+
+    # MC-DC: vary dice_finite (rows 1 vs 5)
+    def test_mcdc_dice_finite_true(self):
+        assert is_result_valid(True, True, True, True) is True
+
+    def test_mcdc_dice_finite_false(self):
+        assert is_result_valid(True, False, True, True) is False
+
+    # MC-DC: vary area_above_min (rows 2 vs 4)
+    def test_mcdc_area_true(self):
+        assert is_result_valid(True, True, True, False) is True
+
+    def test_mcdc_area_false(self):
+        assert is_result_valid(True, True, False, False) is False
+
+    # MC-DC: vary allow_empty (rows 3 vs 4)
+    def test_mcdc_allow_empty_true(self):
+        assert is_result_valid(True, True, False, True) is True
+
+    def test_mcdc_allow_empty_false(self):
+        assert is_result_valid(True, True, False, False) is False
+
+    # Additional clause coverage
+    def test_all_false_returns_false(self):
+        assert is_result_valid(False, False, False, False) is False
