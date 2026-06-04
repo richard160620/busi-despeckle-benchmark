@@ -8,7 +8,7 @@ Testing methods applied:
 import numpy as np
 import pytest
 
-from src.segment import postprocess_mask, predict
+from src.segment import build_model, postprocess_mask, predict
 
 
 # ---------------------------------------------------------------------------
@@ -90,3 +90,28 @@ class TestPostprocessMask:
         mask = postprocess_mask(tiny_image_float)
         assert mask.dtype == bool
         assert mask.shape == tiny_image_float.shape
+
+
+# ---------------------------------------------------------------------------
+# build_model + real U-Net forward pass
+# ---------------------------------------------------------------------------
+
+class TestBuildModel:
+    def test_returns_torch_module(self):
+        import torch.nn as nn
+        model = build_model()
+        assert isinstance(model, nn.Module)
+
+    def test_real_model_predict_shape(self, tiny_image_float):
+        """ISP C2: real torch model (not mock) returns correct shape."""
+        model = build_model()
+        result = predict(model, tiny_image_float)
+        assert result.ndim == 2
+        assert result.shape == tiny_image_float.shape
+
+    def test_real_model_output_in_zero_one(self, tiny_image_float):
+        """Real model output (sigmoid) must stay in [0, 1]."""
+        model = build_model()
+        result = predict(model, tiny_image_float)
+        assert result.min() >= 0.0
+        assert result.max() <= 1.0

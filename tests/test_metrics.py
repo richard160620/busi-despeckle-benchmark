@@ -103,6 +103,11 @@ class TestHD95:
         val = hd95(tiny_mask, tiny_mask)
         assert val >= 0.0
 
+    def test_one_empty_returns_large_distance(self, tiny_mask, empty_mask):
+        """BVA: one mask empty -> diagonal distance (not zero)."""
+        val = hd95(tiny_mask, empty_mask)
+        assert val > 0.0
+
     def test_shape_mismatch_raises(self, tiny_mask):
         with pytest.raises(ValueError):
             hd95(tiny_mask, np.zeros((16, 16), dtype=bool))
@@ -118,10 +123,16 @@ class TestPSNR:
         assert val > 40.0  # very high PSNR for identical images
 
     def test_positive_value(self, tiny_image_float):
-        import numpy as np
         noisy = np.clip(tiny_image_float + 0.1, 0, 1).astype(np.float32)
         val = psnr(noisy, tiny_image_float)
         assert val > 0.0
+
+    def test_constant_reference_uses_data_range_one(self):
+        """BVA: constant reference (data_range==0) falls back to range=1."""
+        ref = np.ones((16, 16), dtype=np.float32) * 0.5
+        img = ref.copy()
+        val = psnr(img, ref)
+        assert isinstance(float(val), float)
 
 
 class TestSSIM:
@@ -130,10 +141,15 @@ class TestSSIM:
         assert val == pytest.approx(1.0, abs=1e-5)
 
     def test_in_minus_one_to_one(self, tiny_image_float):
-        import numpy as np
         noisy = np.clip(tiny_image_float + 0.2, 0, 1).astype(np.float32)
         val = ssim(noisy, tiny_image_float)
         assert -1.0 <= val <= 1.0
+
+    def test_constant_reference_uses_data_range_one(self):
+        """BVA: constant reference (data_range==0) falls back to range=1."""
+        ref = np.ones((16, 16), dtype=np.float32) * 0.5
+        val = ssim(ref, ref)
+        assert isinstance(float(val), float)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +161,12 @@ class TestNIQE:
         val = niqe(tiny_image_float)
         assert isinstance(float(val), float)
         assert val >= 0.0
+
+    def test_constant_image_returns_zero(self):
+        """BVA: constant image -> global_var==0 -> score=0.0."""
+        img = np.ones((32, 32), dtype=np.float32) * 0.5
+        val = niqe(img)
+        assert val == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------

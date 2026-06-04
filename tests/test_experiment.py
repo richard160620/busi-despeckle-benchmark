@@ -93,6 +93,52 @@ class TestExperimentRunErrors:
         with pytest.raises(ValueError):
             run(cfg)
 
+    def test_empty_subset_raises(self):
+        """Edge: validate_config -> ValueError for empty data_subset."""
+        cfg = _make_config(methods=["none"], labels=[])
+        with pytest.raises(ValueError):
+            run(cfg)
+
+    def test_pipeline_step_error_propagates_as_runtime_error(self):
+        """Edge: step error -> RuntimeError with context."""
+        class _BrokenModel:
+            def __call__(self, x):
+                raise RuntimeError("model exploded")
+
+        cfg = _make_config(methods=["none"], mock_model=_BrokenModel())
+        with pytest.raises(RuntimeError, match="Pipeline failed"):
+            run(cfg)
+
+    def test_run_with_real_busi_path(self, tmp_path):
+        """Edge: data_root not None -> load_busi path in _load_or_generate."""
+        import numpy as np
+        import skimage.io as skio
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            d = root / label
+            d.mkdir(parents=True)
+            img = np.random.randint(0, 256, (32, 32), dtype=np.uint8)
+            mask = np.zeros((32, 32), dtype=np.uint8)
+            mask[8:24, 8:24] = 255
+            skio.imsave(str(d / f"{label}_001.png"), img)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mask)
+
+        class _MockModel:
+            def __call__(self, x):
+                import torch
+                return torch.full_like(x, 0.8)
+
+        cfg = {
+            "methods": ["none"],
+            "data_root": root,
+            "data_subset": ["benign"],
+            "model": _MockModel(),
+            "despeckle_params": {"none": {}},
+            "min_lesion_area": 1,
+        }
+        results = run(cfg)
+        assert len(results) > 0
+
 
 # ---------------------------------------------------------------------------
 # Regression test — Issue #3
