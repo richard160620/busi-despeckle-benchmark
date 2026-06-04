@@ -96,6 +96,130 @@ class TestDespeckleDtype:
         np.testing.assert_array_equal(out, tiny_image)
 
 
+# ---------------------------------------------------------------------------
+# Mutation killers (W10 Syntax-Based Testing)
+# Each test is labelled with the mutant ID it is designed to kill.
+# ---------------------------------------------------------------------------
+
+class TestDespackleMutationKillers:
+    """W10: targeted tests to kill surviving mutmut mutants."""
+
+    def test_default_method_is_none(self, tiny_image_float):
+        """Kill M105: default method='none' — calling without method must work."""
+        out = despeckle(tiny_image_float)          # no method= arg
+        np.testing.assert_array_equal(out, tiny_image_float)
+
+    def test_window_zero_raises_positive_message(self, tiny_image_float):
+        """Kill M97+M99: window=0 must raise 'positive', not fall through to 'odd'."""
+        with pytest.raises(ValueError, match="positive"):
+            despeckle(tiny_image_float, method="median", window_size=0)
+
+    def test_even_window_raises_odd_message(self, tiny_image_float):
+        """Kill M104: even window must say 'odd' in the error."""
+        with pytest.raises(ValueError, match="odd"):
+            despeckle(tiny_image_float, method="median", window_size=2)
+
+    def test_unknown_method_error_contains_unsupported(self, tiny_image_float):
+        """Kill M107+M108: error message for bad method must contain 'Unsupported'."""
+        with pytest.raises(ValueError, match="Unsupported"):
+            despeckle(tiny_image_float, method="bad_method")
+
+    def test_default_window_size_is_valid_odd(self, tiny_image_float):
+        """Kill M114: default window_size=3 (odd); if mutated to 4 (even) → ValueError."""
+        out = despeckle(tiny_image_float, method="median")   # no window_size arg
+        assert out.shape == tiny_image_float.shape
+
+    def test_srad_n_iter_1_differs_from_10(self, tiny_image_float):
+        """Kill M128: n_iter param must be forwarded; 1 iteration ≠ 10 iterations."""
+        out1  = despeckle(tiny_image_float, method="srad", n_iter=1)
+        out10 = despeckle(tiny_image_float, method="srad", n_iter=10)
+        assert not np.allclose(out1, out10)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for filter output values — kill arithmetic mutants
+# (W10 + W14: each pinned value was computed from the correct implementation)
+#
+# Fixed seed=99, 8×8 float32 image, window_size=3.
+# Any arithmetic mutation in _median_filter, _lee_filter, _frost_filter,
+# _srad_filter, or _nlm_filter will change these values.
+# ---------------------------------------------------------------------------
+
+class TestDespeckleFilterRegressions:
+    """W10+W14: pinned output values kill arithmetic mutations in filter implementations."""
+
+    _IMG = np.random.default_rng(99).random((8, 8)).astype(np.float32)
+
+    @pytest.mark.regression
+    def test_median_filter_pinned_mean(self):
+        """Kill mutants in _median_filter: pin output mean/std on seed-99 image."""
+        out = despeckle(self._IMG, method="median", window_size=3)
+        assert out.mean() == pytest.approx(0.509988, abs=1e-4)
+        assert out.std()  == pytest.approx(0.141972, abs=1e-4)
+
+    @pytest.mark.regression
+    def test_lee_filter_pinned_mean(self):
+        """Kill mutants in _lee_filter: local_var, noise_var, k formula."""
+        out = despeckle(self._IMG, method="lee", window_size=3)
+        assert out.mean() == pytest.approx(0.505515, abs=1e-4)
+        assert out[0, 0]  == pytest.approx(0.521568, abs=1e-4)
+
+    @pytest.mark.regression
+    def test_frost_filter_pinned_corner(self):
+        """Kill mutants in _frost_filter: damping constant, weight formula."""
+        out = despeckle(self._IMG, method="frost", window_size=3)
+        assert out[0, 0]  == pytest.approx(0.556666, abs=2e-4)
+        assert out[3, 3]  == pytest.approx(0.444108, abs=2e-4)
+
+    @pytest.mark.regression
+    def test_srad_filter_pinned_mean(self):
+        """Kill mutants in _srad_filter: gradient, diffusion coefficient formula."""
+        out = despeckle(self._IMG, method="srad", n_iter=10)
+        assert out.mean() == pytest.approx(0.504512, abs=1e-4)
+        assert out.std()  == pytest.approx(0.053290, abs=1e-4)
+
+    @pytest.mark.regression
+    def test_nlm_filter_pinned_mean(self):
+        """Kill mutants in _nlm_filter: normalise/denormalise formula."""
+        out = despeckle(self._IMG, method="nlm", window_size=3)
+        assert out.mean() == pytest.approx(0.500486, abs=1e-3)
+        assert out[3, 3]  == pytest.approx(0.580652, abs=1e-3)
+
+    def test_median_float_output_stays_in_unit_interval(self):
+        """Kill M145 (*255 return): if output is ×255 instead of ÷255, range >> 1."""
+        out = despeckle(self._IMG, method="median", window_size=3)
+        assert out.min() >= 0.0
+        assert out.max() <= 1.0 + 1e-5
+
+    def test_median_float_input_max_exactly_one(self):
+        """Kill M139+M143 (<= vs <): image with max==1.0 must use float path."""
+        img = np.zeros((8, 8), dtype=np.float32)
+        img[0, 0] = 1.0   # max == 1.0 exactly
+        out = despeckle(img, method="median", window_size=3)
+        # float path: output in [0,1]; uint8 path would change values
+        assert out.max() <= 1.0 + 1e-5
+        assert out.dtype == np.float32
+
+    def test_median_output_not_near_zero_for_bright_image(self):
+        """Kill M135 (*255 → /255): bright float image (/255 → near-zero output)."""
+        img = np.full((8, 8), 0.8, dtype=np.float32)  # all 0.8
+        out = despeckle(img, method="median", window_size=3)
+        # Correct: output ~0.8; M135 (/255): output ~0.003
+        assert out.mean() > 0.5
+
+    def test_median_output_differs_from_lee(self):
+        """Sanity: different filters produce different outputs (catches method-swap mutants)."""
+        med = despeckle(self._IMG, method="median", window_size=3)
+        lee = despeckle(self._IMG, method="lee",    window_size=3)
+        assert not np.allclose(med, lee)
+
+    def test_lee_output_differs_from_srad(self):
+        """Sanity: lee ≠ srad output."""
+        lee  = despeckle(self._IMG, method="lee",  window_size=3)
+        srad = despeckle(self._IMG, method="srad", n_iter=10)
+        assert not np.allclose(lee, srad)
+
+
 # ===========================================================================
 # PARAMETRIZED MATRIX — ISP W6 full expansion
 #

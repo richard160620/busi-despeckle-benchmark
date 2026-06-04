@@ -58,9 +58,13 @@ class TestFriedmanTest:
         assert isinstance(float(stat), float)
         assert 0.0 <= p <= 1.0
 
-    def test_fewer_than_two_groups_raises(self):
+    def test_fewer_than_three_groups_raises(self):
         with pytest.raises(ValueError):
             friedman_test(np.ones(5))
+
+    def test_two_groups_also_raises(self):
+        with pytest.raises(ValueError):
+            friedman_test(np.ones(5), np.ones(5))
 
     def test_unequal_group_lengths_raises(self):
         with pytest.raises(ValueError):
@@ -106,3 +110,86 @@ class TestMakeResultTable:
 
     def test_empty_input_returns_empty(self):
         assert make_result_table([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Mutation killers (W10 Syntax-Based Testing)
+# ---------------------------------------------------------------------------
+
+class TestStatsMutationKillers:
+    """W10: targeted tests to kill surviving mutmut mutants in src/stats.py."""
+
+    # --- wilcoxon_compare (M320, M323, M328, M329) ---
+    def test_length_mismatch_error_message(self):
+        """Kill M320: error message must contain 'length'."""
+        with pytest.raises(ValueError, match="length"):
+            wilcoxon_compare([1, 2, 3, 4], [1, 2, 3])
+
+    def test_too_few_samples_error_message(self):
+        """Kill M323: error message must contain '4'."""
+        with pytest.raises(ValueError, match="4"):
+            wilcoxon_compare([1, 2, 3], [1, 2, 3])
+
+    def test_identical_arrays_statistic_is_zero(self):
+        """Kill M328: statistic for identical arrays must be 0.0, not 1.0."""
+        stat, p = wilcoxon_compare(np.ones(8), np.ones(8))
+        assert stat == pytest.approx(0.0)
+
+    def test_identical_arrays_pvalue_is_one(self):
+        """Kill M329: p-value for identical arrays must be 1.0, not 2.0."""
+        _, p = wilcoxon_compare(np.ones(8), np.ones(8))
+        assert p == pytest.approx(1.0)
+        assert p <= 1.0  # p-value must be in [0,1]
+
+    # --- friedman_test (M331, M332, M333, M338) ---
+    def test_exactly_three_groups_is_valid(self):
+        """Kill M331 (<3→≤3): 3 groups must be accepted."""
+        g1 = np.array([1.0, 2.0, 3.0, 4.0])
+        g2 = np.array([1.5, 2.5, 3.5, 4.5])
+        g3 = np.array([2.0, 3.0, 4.0, 5.0])
+        stat, p = friedman_test(g1, g2, g3)   # must NOT raise
+        assert 0.0 <= p <= 1.0
+
+    def test_one_group_raises(self):
+        """Kill M331+M332: exactly 1 group (<3) must raise ValueError."""
+        with pytest.raises(ValueError):
+            friedman_test(np.ones(5))
+
+    def test_too_few_groups_error_message(self):
+        """Kill M333: error message must contain '3'."""
+        with pytest.raises(ValueError, match="3"):
+            friedman_test(np.ones(5))
+
+    def test_unequal_lengths_error_message(self):
+        """Kill M338: error message for unequal lengths must contain 'length'."""
+        with pytest.raises(ValueError, match="length"):
+            friedman_test(np.ones(5), np.ones(4), np.ones(5))
+
+    # --- correct_pvalues (M344, M345) ---
+    def test_unsupported_method_error_message(self):
+        """Kill M344+M345: error message must contain 'bonferroni' or 'fdr_bh'."""
+        with pytest.raises(ValueError, match="bonferroni"):
+            correct_pvalues([0.05], method="bad")
+
+    # --- make_result_table (M347-M350): sorting key mutations ---
+    def test_sorted_by_method_first(self):
+        """Kill M347+M348: table must sort by method key."""
+        records = [
+            {"method": "none",   "label": "benign"},
+            {"method": "median", "label": "benign"},
+            {"method": "lee",    "label": "benign"},
+        ]
+        result = make_result_table(records)
+        methods = [r["method"] for r in result]
+        assert methods == sorted(methods)   # sorted alphabetically by method
+
+    def test_sorted_by_label_within_method(self):
+        """Kill M349+M350: within same method, sorted by label key."""
+        records = [
+            {"method": "none", "label": "normal"},
+            {"method": "none", "label": "benign"},
+            {"method": "none", "label": "malignant"},
+        ]
+        result = make_result_table(records)
+        labels = [r["label"] for r in result]
+        assert labels == sorted(labels)

@@ -47,17 +47,17 @@ def friedman_test(*groups):
     """Friedman test for k related samples.
 
     Args:
-        *groups: two or more equal-length array-likes.
+        *groups: three or more equal-length array-likes (scipy requires k >= 3).
 
     Returns:
         (statistic, p_value) tuple.
 
     Raises:
-        ValueError: if fewer than 2 groups or unequal lengths.
+        ValueError: if fewer than 3 groups or unequal lengths.
     """
-    if len(groups) < 2:
+    if len(groups) < 3:
         raise ValueError(
-            f"At least 2 groups required, got {len(groups)}"
+            f"At least 3 groups required, got {len(groups)}"
         )
     groups = [np.asarray(g, dtype=float) for g in groups]
     lengths = [len(g) for g in groups]

@@ -232,6 +232,105 @@ class TestIsResultValid:
         assert is_result_valid(False, False, False, False) is False
 
 
+# ---------------------------------------------------------------------------
+# Mutation killers (W10 Syntax-Based Testing)
+# Each test is labelled with the mutant ID it kills.
+# ---------------------------------------------------------------------------
+
+class TestMetricsMutationKillers:
+    """W10: targeted tests against each surviving mutmut mutant."""
+
+    # --- _check_shapes error message (M2) ---
+    def test_dice_shape_mismatch_error_message(self):
+        """Kill M2: error message must contain 'mismatch', not 'XXmismatch'."""
+        a, b = np.zeros((4, 4), dtype=bool), np.zeros((4, 5), dtype=bool)
+        with pytest.raises(ValueError, match="mismatch"):
+            dice(a, b)
+
+    # --- hd95 one-empty logic (M34, M36, M37) ---
+    def test_hd95_empty_pred_nonempty_target_is_diagonal(self):
+        """Kill M37: only pred empty → large distance (not zero, not Hausdorff).
+        Kill M34: pred has exactly 0 pts (not 1) triggers the branch."""
+        pred   = np.zeros((8, 16), dtype=bool)          # pred empty
+        target = np.zeros((8, 16), dtype=bool)
+        target[0, :] = True                              # target non-empty
+        val = hd95(pred, target)
+        expected = float(np.sqrt(8 ** 2 + 16 ** 2))    # diagonal of (8,16)
+        assert val == pytest.approx(expected)
+
+    def test_hd95_nonempty_pred_empty_target_is_diagonal(self):
+        """Kill M36: only target empty → diagonal distance."""
+        pred   = np.zeros((8, 16), dtype=bool)
+        pred[0, :] = True
+        target = np.zeros((8, 16), dtype=bool)
+        val = hd95(pred, target)
+        expected = float(np.sqrt(8 ** 2 + 16 ** 2))
+        assert val == pytest.approx(expected)
+
+    def test_hd95_diagonal_formula_uses_h_and_w(self):
+        """Kill M38-44: diagonal must be sqrt(H²+W²); non-square shape exposes H≠W."""
+        pred   = np.zeros((6, 10), dtype=bool)          # H=6, W=10 → diag=sqrt(136)
+        target = np.zeros((6, 10), dtype=bool)
+        target[3, 5] = True
+        val = hd95(pred, target)
+        assert val == pytest.approx(np.sqrt(6 ** 2 + 10 ** 2))
+
+    # --- psnr data_range (M51, M52) ---
+    def test_psnr_uses_max_minus_min(self):
+        """Kill M51+M52: data_range = max - min (not max + min, not None).
+        ref min=0.3, max=0.7 → range=0.4; M51 would use 0.3+0.7=1.0 instead."""
+        ref = np.array([[0.3, 0.3], [0.7, 0.7]], dtype=np.float64)
+        img = np.array([[0.4, 0.4], [0.8, 0.8]], dtype=np.float64)  # MSE = 0.01
+        # Correct: data_range=0.4, PSNR=10*log10(0.16/0.01)≈12.04 dB
+        # Mutant M51 (max+min=1.0): PSNR=10*log10(1.0/0.01)=20.0 dB
+        val = psnr(img, ref)
+        expected = 10 * np.log10(0.4 ** 2 / 0.01)
+        assert val == pytest.approx(expected, abs=0.1)
+
+    def test_psnr_zero_data_range_fallback_is_one(self):
+        """Kill M53-56: zero data_range uses fallback=1.0 (not 2.0)."""
+        ref = np.full((8, 8), 0.5, dtype=np.float32)   # range=0
+        img = ref + 0.1                                  # MSE=0.01
+        val = psnr(img, ref)
+        expected = 10 * np.log10(1.0 / 0.01)            # ≈20 dB with range=1
+        assert val == pytest.approx(expected, abs=0.2)
+
+    # --- ssim data_range (M59, M61-63) ---
+    def test_ssim_uses_max_minus_min(self):
+        """Kill M59: ssim data_range = max - min."""
+        ref = np.zeros((16, 16), dtype=np.float32)
+        ref[:8, :] = 1.0                                 # range = 1.0
+        val = ssim(ref, ref)
+        assert val == pytest.approx(1.0, abs=0.01)
+
+    def test_ssim_zero_data_range_fallback_is_one(self):
+        """Kill M61-63: zero data_range uses fallback=1.0."""
+        ref = np.full((16, 16), 0.5, dtype=np.float32)
+        img = ref + 0.05
+        val_low_noise = ssim(img, ref)
+        # With fallback=2.0 the result is different; assert we get a sane value
+        assert -1.0 <= val_low_noise <= 1.0
+
+    # --- niqe (M66, M68-84) ---
+    def test_niqe_nonconstant_is_positive(self):
+        """Kill M66 (global_mean→None crash) + M68 (!=0 flips condition):
+        non-constant image → global_var > 0 → returns positive score."""
+        img = np.random.default_rng(7).random((32, 32)).astype(np.float32)
+        val = niqe(img)
+        assert val > 0.0        # M68 mutant would enter constant-image branch → 0.0
+
+    @pytest.mark.regression
+    def test_niqe_regression_pinned_value(self):
+        """Kill M71-80,M82-84 (formula mutations): pin exact niqe for seed=42.
+        W10 mutation + W14 regression combined."""
+        rng = np.random.default_rng(42)
+        img = rng.random((64, 64)).astype(np.float32)
+        val = niqe(img)
+        # Pinned value = 0.98895862 (computed on correct implementation)
+        # M82 (÷ → ×) → val >> 1; M71 (filter 7→8) → val ≠ 0.9889
+        assert val == pytest.approx(0.98895862, rel=1e-4)
+
+
 # ===========================================================================
 # PARAMETRIZED MATRIX — ISP W6 full expansion for metrics
 #

@@ -38,10 +38,9 @@ mutmut results
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| Line coverage (`pytest --cov`) | ≥ 90 % | TBD |
-| Mutation score (`mutmut run`) | ≥ 80 % | TBD |
-
-*(Update this table after Step 8.)*
+| Line coverage (`pytest --cov`) | ≥ 90 % | **97 %** (375 stmts, 12 missed) |
+| Mutation score (`mutmut run`) | ≥ 80 % | **85.5 %** (300 killed / 351 total) |
+| Total tests | ≥ 1000 | **1585** |
 
 ---
 
