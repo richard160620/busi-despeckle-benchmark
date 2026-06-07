@@ -296,3 +296,22 @@ class TestDespeckleParametrize:
         img = np.random.default_rng(1).random((8, 8)).astype(np.float32)
         with pytest.raises(ValueError):
             despeckle(img, method=method, window_size=kernel)
+
+
+# ---------------------------------------------------------------------------
+# Regression: _frost_filter must be vectorized, not a per-pixel Python loop
+# (a naive double for-loop scales so badly on real BUSI-sized images that it
+#  blocks the single-threaded Flask dev server for minutes — this is the
+#  root cause of the user-reported "the web has not responded" symptom)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.regression
+class TestFrostFilterPerformance:
+    def test_frost_runs_well_under_a_second_on_a_realistic_image(self):
+        import time
+
+        img = np.random.default_rng(2).random((256, 256)).astype(np.float64)
+        t0 = time.time()
+        despeckle(img, method="frost", window_size=5)
+        elapsed = time.time() - t0
+        assert elapsed < 1.0, f"frost took {elapsed:.2f}s on a 256x256 image — too slow for a web request"
