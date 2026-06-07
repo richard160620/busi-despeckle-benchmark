@@ -72,6 +72,14 @@ class TestIndexRoute:
         for method in [b"none", b"median", b"lee", b"frost", b"srad", b"nlm"]:
             assert method in r.data
 
+    def test_response_contains_tailwind_and_dashboard_elements(self, client):
+        """Test that the advanced UI elements are present."""
+        r = client.get("/")
+        assert b"tailwindcss.com" in r.data
+        assert b"BUSI Dashboard" in r.data
+        assert b"Show Red Overlays" in r.data
+        assert b"Metrics Summary Table" in r.data
+
 
 # ---------------------------------------------------------------------------
 # POST /segment — happy path
@@ -123,8 +131,8 @@ class TestSegmentHappyPath:
         assert len(data["mask"]) > 0
 
     @pytest.mark.parametrize("method", ["none", "median", "lee", "frost", "srad", "nlm"])
-    def test_all_despeckle_methods_return_200(self, client, tiny_png_bytes, method):
-        """ISP C3: each despeckle method → 200 (Graph Coverage W7: each dispatch edge)."""
+    def test_all_despeckle_methods_accepted(self, client, tiny_png_bytes, method):
+        """Verify each method in _SUPPORTED_METHODS is actually accepted."""
         r = client.post(
             "/segment",
             data={"method": method, "image": (io.BytesIO(tiny_png_bytes), "test.png")},
@@ -201,6 +209,20 @@ class TestSegmentErrors:
 
 class TestAdvancedAPI:
     """Tests for advanced features: multi-method, rich metrics, and overlays."""
+
+    def test_multi_method_unknown_raises_400(self, client, tiny_png_bytes):
+        """Test that if one of the multiple methods is unknown, it returns 400."""
+        r = client.post(
+            "/segment",
+            data={
+                "method": ["median", "invalid_filter"],
+                "image": (io.BytesIO(tiny_png_bytes), "test.png")
+            },
+            content_type="multipart/form-data",
+        )
+        assert r.status_code == 400
+        data = r.get_json()
+        assert "Unknown despeckle method" in data["error"]
 
     def test_multi_method_returns_list_of_results(self, client, tiny_png_bytes):
         """Test that passing multiple methods returns a list of results."""

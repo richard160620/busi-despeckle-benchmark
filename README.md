@@ -27,6 +27,9 @@ pytest --cov=src --cov-report=term-missing
 # Run only regression tests
 pytest -m regression
 
+# Run the web demo
+python3 main.py
+
 # Mutation testing (target: >= 80%)
 mutmut run
 mutmut results

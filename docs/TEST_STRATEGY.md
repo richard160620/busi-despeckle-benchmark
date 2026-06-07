@@ -72,7 +72,14 @@ training is out of scope; the U-Net is mocked in all CI-facing tests.
 |----------------|---------|---------|---------|
 | C1 image file | present and valid | absent | — |
 | C2 method param | valid (`none`…`nlm`) | unknown string | empty string |
-| C3 HTTP verb | POST | GET / PUT / DELETE | — |
+| C3 multi-method | single method | multiple methods (list) | — |
+| C4 HTTP verb | POST | GET / PUT / DELETE | — |
+
+### Advanced Dashboard Features
+
+- **Rich Metrics**: Response includes HD95, PSNR, SSIM, and NIQE.
+- **Overlays**: Response includes base64 RGB overlay for medical visualization.
+- **Bulk Processing**: Supports simultaneous benchmarking of multiple filters.
 
 ### Experiment matrix (RQ1–RQ3)
 
@@ -178,6 +185,10 @@ because it returns before window validation.
 | `test_unknown_route_get_returns_404` | 404 | Graph edge unknown_route |
 | `test_segment_get_returns_405` | 405 | Graph edge wrong_verb |
 | `test_segment_put_returns_405` | 405 | Graph edge wrong_verb |
+| `test_segment_delete_returns_405` | 405 | Graph edge wrong_verb |
+| `test_multi_method_returns_list` | 200 | Advanced: Bulk processing |
+| `test_response_contains_rich_metrics`| 200 | Advanced: HD95/PSNR/SSIM/NIQE |
+| `test_response_contains_overlay` | 200 | Advanced: Medical Overlay |
 
 ### 5c. Parametrized matrix tests (W6 ISP — 1118 tests)
 
