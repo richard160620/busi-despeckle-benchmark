@@ -217,3 +217,42 @@ class TestErrorHandlers:
 
     def test_segment_delete_returns_405(self, client):
         assert client.delete("/segment").status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# Regression: /segment JSON contract
+# ---------------------------------------------------------------------------
+
+@pytest.mark.regression
+class TestSegmentResponseContract:
+    """Regression guard: /segment must always return the five expected JSON keys."""
+
+    def test_segment_returns_all_expected_keys(self, client, tiny_png_bytes):
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert set(data.keys()) >= {"original", "denoised", "mask", "dice", "iou"}
+
+    def test_segment_image_keys_are_nonempty_strings(self, client, tiny_png_bytes):
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        data = r.get_json()
+        for key in ("original", "denoised", "mask"):
+            assert isinstance(data[key], str) and len(data[key]) > 0
+
+    def test_segment_metric_keys_are_floats(self, client, tiny_png_bytes):
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        data = r.get_json()
+        assert isinstance(data["dice"], float)
+        assert isinstance(data["iou"], float)

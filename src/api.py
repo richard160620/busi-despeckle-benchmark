@@ -33,11 +33,21 @@ _HTML_FORM = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <title>BUSI Despeckle &amp; Segment Demo</title>
-  <style>body{{font-family:sans-serif;max-width:600px;margin:2em auto}}</style>
+  <style>
+    body{{font-family:sans-serif;max-width:800px;margin:2em auto}}
+    #results{{display:none;margin-top:1.5em}}
+    .images{{display:flex;gap:1em;margin-top:1em}}
+    .images figure{{flex:1;text-align:center;margin:0}}
+    .images img{{width:100%;border:1px solid #ccc}}
+    .images figcaption{{margin-top:.4em;font-weight:bold}}
+    #metrics{{margin-top:1em;font-size:1.1em}}
+    #error{{color:red;margin-top:1em}}
+    button{{cursor:pointer}}
+  </style>
 </head>
 <body>
   <h1>Breast Ultrasound Despeckle &amp; Segment</h1>
-  <form method="post" action="/segment" enctype="multipart/form-data">
+  <form id="form" enctype="multipart/form-data">
     <p><label>Image (PNG/JPG):
       <input type="file" name="image" accept="image/*" required>
     </label></p>
@@ -53,6 +63,54 @@ _HTML_FORM = """<!doctype html>
     </label></p>
     <p><button type="submit">Segment</button></p>
   </form>
+  <div id="error"></div>
+  <div id="results">
+    <div class="images">
+      <figure>
+        <img id="img-original" src="" alt="Original">
+        <figcaption>Original</figcaption>
+      </figure>
+      <figure>
+        <img id="img-denoised" src="" alt="Denoised">
+        <figcaption>Denoised</figcaption>
+      </figure>
+      <figure>
+        <img id="img-mask" src="" alt="Mask">
+        <figcaption>Mask</figcaption>
+      </figure>
+    </div>
+    <div id="metrics"></div>
+  </div>
+  <script>
+    document.getElementById('form').addEventListener('submit', async function(e) {{
+      e.preventDefault();
+      const errorEl = document.getElementById('error');
+      const resultsEl = document.getElementById('results');
+      errorEl.textContent = '';
+      resultsEl.style.display = 'none';
+
+      const formData = new FormData(this);
+      let data;
+      try {{
+        const resp = await fetch('/segment', {{method: 'POST', body: formData}});
+        data = await resp.json();
+        if (!resp.ok) {{
+          errorEl.textContent = data.error || 'Request failed';
+          return;
+        }}
+      }} catch (err) {{
+        errorEl.textContent = 'Network error: ' + err.message;
+        return;
+      }}
+
+      document.getElementById('img-original').src = 'data:image/png;base64,' + data.original;
+      document.getElementById('img-denoised').src = 'data:image/png;base64,' + data.denoised;
+      document.getElementById('img-mask').src = 'data:image/png;base64,' + data.mask;
+      document.getElementById('metrics').innerHTML =
+        '<strong>Dice:</strong> ' + data.dice + ' &nbsp; <strong>IoU:</strong> ' + data.iou;
+      resultsEl.style.display = 'block';
+    }});
+  </script>
 </body>
 </html>"""
 
