@@ -17,6 +17,7 @@ Graph Coverage edges (W7):
 """
 import base64
 import io
+import math
 
 import numpy as np
 from flask import Flask, jsonify, request
@@ -323,6 +324,25 @@ _HTML_FORM = """<!doctype html>
 </html>"""
 
 
+def _finite_round(value: float, ndigits: int, cap: float = 100.0) -> float:
+    """Round a metric value, replacing non-finite results with a finite cap.
+
+    PSNR is mathematically infinite when two images are identical (MSE == 0,
+    e.g. the "none" despeckle method on the mock pipeline). `Infinity`/`NaN`
+    are valid Python floats but are *not* valid JSON tokens — Flask's
+    jsonify would emit them verbatim and the browser's resp.json() then
+    throws a SyntaxError ("The string did not match the expected pattern").
+    Capping keeps the response strictly valid JSON while preserving the
+    "very high quality" signal for display.
+    """
+    value = float(value)
+    if math.isnan(value):
+        return 0.0
+    if math.isinf(value):
+        value = cap if value > 0 else -cap
+    return round(value, ndigits)
+
+
 def _ndarray_to_b64_png(arr: np.ndarray) -> str:
     """Convert a 2-D or 3-D numpy array to a base64-encoded PNG string."""
     from PIL import Image
@@ -441,7 +461,7 @@ def create_app(model=None):
                 "dice": round(float(dice_val), 4),
                 "iou": round(float(iou_val), 4),
                 "hd95": round(float(hd95_val), 2),
-                "psnr": round(float(psnr_val), 2),
+                "psnr": _finite_round(psnr_val, 2),
                 "ssim": round(float(ssim_val), 4),
                 "niqe": round(float(niqe_val), 4),
                 "original": orig_b64,
