@@ -113,6 +113,26 @@ class TestHD95:
             hd95(tiny_mask, np.zeros((16, 16), dtype=bool))
 
 
+@pytest.mark.regression
+class TestHD95Performance:
+    """hd95 must scale to realistic BUSI-sized masks. The naive
+    scipy.spatial.distance.directed_hausdorff is brute-force O(m*n) over
+    foreground-pixel coordinate pairs — on a 256x256 mask with ~50% fill
+    (~33k points per side) this alone took >30s per /segment call and
+    froze the whole web UI (root cause of "respond time is too long")."""
+
+    def test_runs_well_under_a_second_on_a_realistic_mask(self):
+        import time
+
+        rng = np.random.default_rng(3)
+        a = rng.random((256, 256)) > 0.5
+        b = rng.random((256, 256)) > 0.5
+        t0 = time.time()
+        hd95(a, b)
+        elapsed = time.time() - t0
+        assert elapsed < 0.2, f"hd95 took {elapsed:.2f}s on a 256x256 mask — too slow for a web request"
+
+
 # ---------------------------------------------------------------------------
 # psnr / ssim
 # ---------------------------------------------------------------------------
