@@ -9,6 +9,7 @@ Status codes covered: 200, 400 (missing file), 400 (unknown method), 404, 405.
 All tests inject a mock model — no GPU or real model required.
 """
 import io
+import math
 import pytest
 import numpy as np
 
@@ -352,3 +353,32 @@ class TestNdarrayToB64PngNormalization:
         mn, mx = arr.min(), arr.max()
         expected = ((arr - mn) / (mx - mn) * 255).astype(np.uint8)
         assert np.array_equal(decoded, expected)
+
+
+# ---------------------------------------------------------------------------
+# Regression: /segment must always return strictly valid JSON
+# (BVA: method="none" -> denoised == original -> MSE == 0 -> PSNR == inf,
+#  and `Infinity`/`NaN` are not valid JSON tokens — they break the
+#  browser's resp.json() with "The string did not match the expected pattern")
+# ---------------------------------------------------------------------------
+
+@pytest.mark.regression
+class TestSegmentResponseIsStrictJSON:
+    def test_response_body_contains_no_non_finite_json_tokens(self, client, tiny_png_bytes):
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        raw = r.get_data(as_text=True)
+        assert "Infinity" not in raw
+        assert "NaN" not in raw
+
+    def test_psnr_is_finite_when_denoised_equals_original(self, client, tiny_png_bytes):
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        data = r.get_json()
+        assert math.isfinite(data["psnr"])
