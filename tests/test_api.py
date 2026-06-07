@@ -330,3 +330,25 @@ class TestSegmentResponseContract:
         data = r.get_json()
         assert isinstance(data["dice"], float)
         assert isinstance(data["iou"], float)
+
+
+# ---------------------------------------------------------------------------
+# Regression: _ndarray_to_b64_png numeric normalization (BVA: mx > mn branch)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.regression
+class TestNdarrayToB64PngNormalization:
+    """Float arrays must be linearly normalized via division (arr-mn)/(mx-mn),
+    not multiplication — kills a survived mutant in the mx > mn branch."""
+
+    def test_float_array_is_linearly_normalized_to_uint8_range(self):
+        import base64
+        from PIL import Image
+        from src.api import _ndarray_to_b64_png
+
+        arr = np.array([[0.0, 5.0], [10.0, 20.0]], dtype=np.float64)
+        decoded = np.array(Image.open(io.BytesIO(base64.b64decode(_ndarray_to_b64_png(arr)))))
+
+        mn, mx = arr.min(), arr.max()
+        expected = ((arr - mn) / (mx - mn) * 255).astype(np.uint8)
+        assert np.array_equal(decoded, expected)
