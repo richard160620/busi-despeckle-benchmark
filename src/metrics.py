@@ -21,7 +21,7 @@ ISP Characteristics (W6):
   C3 - area size: {above min, at min boundary, below min}
 """
 import numpy as np
-from scipy.spatial.distance import directed_hausdorff
+from scipy.spatial import cKDTree
 from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 
 
@@ -66,6 +66,18 @@ def iou(pred, target):
     return float(intersection / union)
 
 
+def _directed_hausdorff(a_pts, b_pts):
+    """max_{a in A} min_{b in B} dist(a, b), via KD-tree nearest-neighbour query.
+
+    Numerically identical to scipy.spatial.distance.directed_hausdorff(a, b)[0]
+    (both compute the exact same quantity), but O(m log n) instead of the
+    brute-force O(m*n) all-pairs distance matrix — the latter took ~38s per
+    call on a 256x256 mask with ~50% foreground fill (W14 perf fix).
+    """
+    dists, _ = cKDTree(b_pts).query(a_pts, k=1)
+    return float(dists.max())
+
+
 def hd95(pred, target):
     """95th-percentile Hausdorff distance (pixels).
 
@@ -86,8 +98,8 @@ def hd95(pred, target):
         # one mask empty — return a large distance (image diagonal)
         return float(np.sqrt(pred.shape[0] ** 2 + pred.shape[1] ** 2))
 
-    d_pt = directed_hausdorff(pred_pts, target_pts)[0]
-    d_tp = directed_hausdorff(target_pts, pred_pts)[0]
+    d_pt = _directed_hausdorff(pred_pts, target_pts)
+    d_tp = _directed_hausdorff(target_pts, pred_pts)
     return float(max(d_pt, d_tp))
 
 
