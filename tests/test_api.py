@@ -196,6 +196,58 @@ class TestSegmentErrors:
 
 
 # ---------------------------------------------------------------------------
+# Advanced API features (TDD Red Stage)
+# ---------------------------------------------------------------------------
+
+class TestAdvancedAPI:
+    """Tests for advanced features: multi-method, rich metrics, and overlays."""
+
+    def test_multi_method_returns_list_of_results(self, client, tiny_png_bytes):
+        """Test that passing multiple methods returns a list of results."""
+        r = client.post(
+            "/segment",
+            data={
+                "method": ["median", "lee"],
+                "image": (io.BytesIO(tiny_png_bytes), "test.png")
+            },
+            content_type="multipart/form-data",
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["method"] == "median"
+        assert data[1]["method"] == "lee"
+
+    def test_response_contains_rich_metrics(self, client, tiny_png_bytes):
+        """Test that the response contains HD95, PSNR, SSIM, and NIQE."""
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        data = r.get_json()
+        # If it returns a list now, check first item
+        result = data[0] if isinstance(data, list) else data
+        assert "hd95" in result
+        assert "psnr" in result
+        assert "ssim" in result
+        assert "niqe" in result
+
+    def test_response_contains_overlay(self, client, tiny_png_bytes):
+        """Test that the response contains a base64 overlay image."""
+        r = client.post(
+            "/segment",
+            data={"method": "none", "image": (io.BytesIO(tiny_png_bytes), "test.png")},
+            content_type="multipart/form-data",
+        )
+        data = r.get_json()
+        result = data[0] if isinstance(data, list) else data
+        assert "overlay" in result
+        assert len(result["overlay"]) > 0
+
+
+# ---------------------------------------------------------------------------
 # Error handlers: 404, 405
 # Graph edges: unknown_route -> 404, wrong_verb -> 405
 # ---------------------------------------------------------------------------
