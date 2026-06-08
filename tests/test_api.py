@@ -81,6 +81,13 @@ class TestIndexRoute:
         assert b"Show Red Overlays" in r.data
         assert b"Metrics Summary Table" in r.data
 
+    def test_template_renders_original_image_element(self, client):
+        """Frontend must render the `original` base64 field as an <img>.
+        The result-template must contain an img-original element so the JS
+        can set its src from res.original (CLAUDE.md §5 frontend requirement)."""
+        r = client.get("/")
+        assert b"img-original" in r.data
+
 
 # ---------------------------------------------------------------------------
 # POST /segment — happy path

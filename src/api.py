@@ -196,7 +196,13 @@ _HTML_FORM = """<!doctype html>
         </div>
       </div>
       
-      <div class="grid grid-cols-2 gap-4">
+      <div class="grid grid-cols-3 gap-4">
+        <div class="space-y-2">
+          <span class="text-xs text-gray-500 uppercase">Original</span>
+          <div class="img-container">
+            <img class="img-original" src="" alt="Original">
+          </div>
+        </div>
         <div class="space-y-2">
           <span class="text-xs text-gray-500 uppercase">Denoised Result</span>
           <div class="img-container group relative">
@@ -298,6 +304,7 @@ _HTML_FORM = """<!doctype html>
         card.querySelector('.val-ssim').textContent = res.ssim;
         card.querySelector('.val-niqe').textContent = res.niqe;
         
+        card.querySelector('.img-original').src = 'data:image/png;base64,' + res.original;
         card.querySelector('.img-denoised').src = 'data:image/png;base64,' + res.denoised;
         card.querySelector('.img-mask').src = 'data:image/png;base64,' + res.mask;
         card.querySelector('.overlay-img').src = 'data:image/png;base64,' + res.overlay;
