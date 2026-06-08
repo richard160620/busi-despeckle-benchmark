@@ -177,6 +177,134 @@ class TestPostprocessParametrize:
 
 
 # ===========================================================================
+# Mutation killers (W9 Syntax-Based / Mutation Testing) — see mutmut survivors
+# for src/segment.py. Each test below targets one or more surviving mutants
+# identified via `mutmut results` + `mutmut show <id>`.
+#
+# Documented EQUIVALENT mutants (no test can distinguish them — proven via
+# direct computation, not tested here):
+#   3, 6   — ReLU(inplace=True/False): output values are bit-identical
+#   47, 54 — F.interpolate(size=e2.shape[-2:] vs [+2:]): identical slices for
+#            any 4-D tensor (e2/e1 are always (N,C,H,W))
+#   50, 57 — align_corners=True/False: the U-Net's stride-2 pool/up-conv pairs
+#            guarantee up-conv output spatial size == skip-connection size for
+#            any input padded to a multiple of 16, so F.interpolate is always
+#            a same-size resize (a no-op regardless of corner alignment)
+#   100    — unsqueeze(0).unsqueeze(0) vs unsqueeze(0).unsqueeze(1): both
+#            insert a singleton axis adjacent to an existing size-1 leading
+#            axis, producing bit-identical tensors (verified empirically)
+# ===========================================================================
+
+class TestSegmentMutationKillers:
+    # -- _LightUNet architecture: kernel/stride/channel-width mutants
+    #    (2,5,8,14,25,26,35,36) via pinned seeded forward-pass output --
+    @pytest.mark.regression
+    def test_real_model_predict_pinned_output_values(self):
+        """Pin torch.manual_seed(0) U-Net forward-pass output for a 32x32
+        (already-multiple-of-16, no padding) input. Any change to conv
+        padding, base width, pool kernel, or up-conv kernel/stride shifts
+        these values by >0.07 — far outside the pinned tolerance."""
+        import torch
+        torch.manual_seed(0)
+        model = build_model()
+        img = np.linspace(0, 1, 32 * 32, dtype=np.float32).reshape(32, 32)
+        out = predict(model, img)
+        assert out.mean() == pytest.approx(0.472008228302, abs=1e-9)
+        assert out[0, 0] == pytest.approx(0.451910674572, abs=1e-9)
+        assert out[17, 23] == pytest.approx(0.476995676756, abs=1e-9)
+        assert out[31, 31] == pytest.approx(0.705146908760, abs=1e-9)
+
+    # -- ndim validation messages (64, 66, 67) --
+    def test_ndim_too_low_message_anchored(self, mock_model):
+        with pytest.raises(ValueError, match=r"^image must be 2-D or 3-D, got ndim=1$"):
+            predict(mock_model, np.zeros(5))
+
+    def test_4d_image_message_anchored(self, mock_model):
+        """Anchored on the *correct* ndim>3 message for a 4-D input. A
+        mutant that changes the boundary to ndim>4 (66) lets a 4-D image
+        fall through to `h, w = img.shape`, raising a *different* ValueError
+        ('too many values to unpack') — failing this match. Also kills the
+        XX-wrapped message at this raise site (67)."""
+        with pytest.raises(ValueError, match=r"^image must be 2-D or 3-D, got ndim=4$"):
+            predict(mock_model, np.zeros((1, 32, 32, 1)))
+
+    # -- 3-D channel-mean axis (71, 72) --
+    def test_3d_image_channel_mean_uses_last_axis(self, mock_model):
+        """HxWxC must be averaged over the channel axis (-1). Averaging over
+        axis +1 or -2 instead collapses W (not C), producing shape (H, C)
+        — observable here because H != C."""
+        img3d = np.random.default_rng(7).random((20, 24, 3)).astype(np.float32)
+        result = predict(mock_model, img3d)
+        assert result.shape == (20, 24)
+
+    # -- normalisation-to-[0,1] branch (74,75,76,77,78) --
+    def test_image_at_max_exactly_one_is_not_rescaled(self):
+        """Boundary: img.max() == 1.0 must NOT trigger the /255 rescale
+        (kills the `>= 1.0` mutant 74, which would divide an already-unit
+        image by 255)."""
+        captured = {}
+
+        class _SpyModel:
+            def __call__(self, x):
+                captured["tensor"] = x.clone()
+                import torch
+                return torch.full_like(x, 0.5)
+
+        img = np.zeros((16, 16), dtype=np.float32)
+        img[0, 0] = 1.0
+        predict(_SpyModel(), img)
+        assert float(captured["tensor"].max()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_image_with_max_above_one_gets_rescaled_by_255(self):
+        """Pin the exact rescale arithmetic (img / 255.0) for an image whose
+        max is in (1.0, 2.0]. Kills:
+          75 (`> 2.0` boundary — would skip rescaling entirely),
+          76 (`* 255.0`), 77 (`/ 256.0`), 78 (`= None` -> AttributeError)."""
+        captured = {}
+
+        class _SpyModel:
+            def __call__(self, x):
+                captured["tensor"] = x.clone()
+                import torch
+                return torch.full_like(x, 0.5)
+
+        img = np.zeros((16, 16), dtype=np.float32)
+        img[0, 0] = 1.5
+        predict(_SpyModel(), img)
+        assert float(captured["tensor"].max()) == pytest.approx(1.5 / 255.0, abs=1e-7)
+
+    # -- pad_h/pad_w arithmetic + padding gate (80,81,83,85,87,88,90,92,94,95,96) --
+    @pytest.mark.parametrize("h,w,expected_padded_shape", [
+        (20, 27, (1, 1, 32, 32)),  # neither dim a multiple of 16 (general arithmetic)
+        (32, 48, (1, 1, 32, 48)),  # both dims already multiples of 16 (r==0 edge case)
+        (32, 27, (1, 1, 32, 32)),  # mixed: pad_h==0, pad_w>0 (kills `or` -> `and` gate)
+    ])
+    def test_predict_pads_to_correct_multiple_of_16(self, h, w, expected_padded_shape):
+        """Pin the exact padded tensor shape fed to the model. Together these
+        three (h, w) combinations distinguish every pad_h/pad_w arithmetic
+        mutant (off-by-one constants, +/- swaps, %16 -> %17) and the
+        `if pad_h or pad_w` -> `and` gate and reflect-pad offset mutants."""
+        captured = {}
+
+        class _SpyModel:
+            def __call__(self, x):
+                captured["shape"] = tuple(x.shape)
+                import torch
+                return torch.full_like(x, 0.5)
+
+        img = np.random.default_rng(1).random((h, w)).astype(np.float32)
+        predict(_SpyModel(), img)
+        assert captured["shape"] == expected_padded_shape
+
+    # -- postprocess_mask threshold-out-of-range message (109) --
+    def test_threshold_out_of_range_message_anchored(self):
+        with pytest.raises(
+            ValueError, match=r"^threshold must be in \[0, 1\], got -0\.1$"
+        ):
+            postprocess_mask(np.zeros((4, 4)), threshold=-0.1)
+
+
+# ===========================================================================
 # REGRESSION — odd-sized inputs must not raise and must preserve shape (W14)
 #
 # Bug: POST /segment returned 500 with RuntimeError on skip-connection concat
