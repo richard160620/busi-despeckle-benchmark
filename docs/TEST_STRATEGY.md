@@ -228,9 +228,9 @@ because it returns before window validation.
 
 | Metric | Target | Actual |
 |--------|--------|--------|
-| Line coverage (`pytest --cov`) | ≥ 90 % | **97 %** (375 stmts, 12 missed) |
-| Mutation score (`mutmut run`) | ≥ 80 % | **85.5 %** (300/351 killed) |
-| Total tests | ≥ 1000 | **1585** |
+| Line coverage (`pytest --cov`) | ≥ 90 % | **99 %** (419/421 stmts; only `app.run()` in `__main__` guard uncovered) |
+| Mutation score (`mutmut run`) | ≥ 80 % | see README Quality Gates (run in progress) |
+| Total tests | ≥ 1000 | **1683** |
 
 ### How to run
 
@@ -241,8 +241,8 @@ pytest --cov=src --cov-report=term-missing
 # Regression tests only
 pytest -m regression
 
-# Mutation testing (core modules, ~10 min)
-mutmut run
+# Mutation testing (all src/ modules, ~30 min)
+mutmut run --paths-to-mutate=src/
 mutmut results
 mutmut show <id>      # inspect a specific surviving mutant
 ```
@@ -393,30 +393,80 @@ Each combination maps to a specific ISP block or BVA boundary — no padding.
 ## 10. Mutation Testing Evidence (W10 Syntax-Based Testing)
 
 ### Setup
-- Tool: `mutmut 2.4.4`
-- Scope: `src/metrics.py`, `src/despeckle.py`, `src/data.py`, `src/stats.py`
-- Runner: `pytest tests/test_metrics.py tests/test_despeckle.py tests/test_data.py tests/test_stats.py -x -q --no-cov --timeout=30`
 
-### Results: 300 killed / 351 total = **85.5 %**
+- **Tool:** `mutmut 2.4.4` (invoked as `python3 -m mutmut` — CLI alias not on PATH)
+- **Scope:** all 7 `src/` modules — `api.py`, `data.py`, `despeckle.py`,
+  `experiment.py`, `metrics.py`, `segment.py`, `stats.py`
+- **Runner:** full pytest suite (1 683 tests, ~4 s baseline)
 
-### Survived → Killer test → Killed
+```bash
+python3 -m mutmut run --paths-to-mutate=src/
+python3 -m mutmut results
+```
 
-| Mutant group | Example mutation | Why it survived initially | Killer test added |
-|---|---|---|---|
-| Error message strings (`M292`, `M297`, `M320`, `M323`, `M333`) | `"XX…XX"` prefix/suffix in error text | `pytest.raises(ValueError)` only checks exception type | Added `match=` parameter checking key substrings (`"root"`, `"label"`, `"length"`, `"3"`) |
-| `hd95` one-empty branch (`M34–M37`) | `or` → `and`; `== 0` → `== 1` | No test with exactly one empty mask + pinned return value | `test_hd95_empty_pred_nonempty_target_is_diagonal` pins `sqrt(H²+W²)` |
-| `hd95` diagonal formula (`M38–44`) | `shape[0]²` → `shape[1]²` | Only square shapes used in value tests | Used non-square `(6, 10)` shape to expose H≠W confusion |
-| `psnr` / `ssim` data_range (`M51–63`) | `max−min` → `max+min` | Tests only checked return-is-float | `test_psnr_uses_max_minus_min` pins exact dB with known MSE; `test_psnr_zero_data_range_fallback_is_one` pins fallback |
-| `niqe` formula (`M68–84`) | `== 0` → `!= 0`; `÷` → `×` | Only `>= 0` asserted | `test_niqe_nonconstant_is_positive` + regression pin `0.98895862` |
-| Filter arithmetic (`M135–145`) | `* 255` → `/ 255`; `<= 1.0` → `< 1.0` | Shape/dtype checks ignored pixel values | `TestDespeckleFilterRegressions`: mean/std/corner values pinned per filter |
-| `srad` param key (`M129`) | `"n_iter"` → `"XXn_iterXX"` | Default value masked the missing param | `test_srad_n_iter_1_differs_from_10`: `n_iter=1` ≠ `n_iter=10` |
-| Default method (`M105`) | `"none"` → `"XXnoneXX"` | All tests passed explicit `method=` | `test_default_method_is_none`: calls `despeckle(img)` with no method arg |
+### Per-file survivor analysis and killer tests
 
-### Remaining survivors (51 / 351 = 14.5 %)
+#### `src/data.py`
 
-| Category | Count | Reason |
-|----------|-------|--------|
-| **Equivalent mutants** | 8 | Epsilon changes (`1e-10` → `2e-10`) produce numerically identical results within float64 precision — no observable difference exists |
-| **Deep filter arithmetic** | 24 | Internal operations of `_frost_filter`, `_srad_filter`, `_nlm_filter` where mutated intermediate values converge to similar statistics for random inputs; per-pixel regression across all pixels would be brittle |
-| **XX-prefix error messages** | 10 | `re.search` finds the matched substring anywhere in `"XXoriginal_textXX"` — anchored regex (`\A`) or full-message equality checks would kill these but couple tests to exact wording |
-| **Data loading edge cases** | 9 | `continue`→`break` and shape-slice mutations that require a dataset with partially-missing masks mid-directory to distinguish |
+| Survivor | Mutation | Why it survived | Killer test added |
+|----------|----------|-----------------|-------------------|
+| XX-wrapped error messages | `"XX…XX"` wrapping | `match=` substring survives inside XX | `TestDataMutationKillers`: anchored `^…$` match on full message |
+| `continue`→`break` in mask loop | would stop after first paired file | No dataset with >1 image per label | `test_each_label_returns_all_three_images` pins count=3 |
+
+#### `src/despeckle.py`
+
+| Survivor | Mutation | Why it survived | Killer test added |
+|----------|----------|-----------------|-------------------|
+| `<= 1.0` → `< 1.0` in float normalisation | off-by-one at boundary | No test uses exactly 1.0 | `test_exact_one_normalised_to_255` |
+| `* 255` → `/ 255` in uint8 conversion | swaps scale direction | Only dtype checked | `TestDespeckleFilterRegressions`: pinned mean/std/corner values per filter |
+| Default window param key (XX-wrapped) | `"window_size"` → `"XXwindow_sizeXX"` | All tests passed explicit kwarg | `test_default_window_size_is_3` |
+
+#### `src/experiment.py`
+
+| Survivor | Mutation | Why it survived | Killer test added |
+|----------|----------|-----------------|-------------------|
+| XX-wrapped config keys | `"methods"` → `"XXmethodsXX"` | Dict.get returned None silently | `TestExperimentMutationKillers`: pin exact error text and key presence |
+| `len(methods) == 0` → `!= 0` | inverts empty-methods check | No test calls with non-empty methods that should raise | pin behaviour on valid vs. empty methods dict |
+
+#### `src/metrics.py`
+
+| Survivor | Mutation | Why it survived | Killer test added |
+|----------|----------|-----------------|-------------------|
+| `hd95` one-empty branch (`or`→`and`) | wrong fallback path | No test with exactly one empty mask | `test_hd95_empty_pred_nonempty_target_is_diagonal` pins `sqrt(H²+W²)` |
+| `psnr` data_range formula | `max−min` → `max+min` | Tests only checked type | `test_psnr_uses_max_minus_min` pins exact dB with known MSE |
+| `niqe` formula (`÷`→`×`) | changes weight combination | Only sign check | `test_niqe_nonconstant_is_positive` + regression pin `0.98895862` |
+
+#### `src/segment.py`
+
+| Survivor | Mutation | Why it survived | Killer test added |
+|----------|----------|-----------------|-------------------|
+| XX-wrapped method names in dispatch | swapped dispatch string | No test pinned which function was called | `test_despeckle_method_field_dispatches_correctly` |
+| `threshold` sign flip | `>= t` → `<= t` | Only extreme thresholds (0.0, 1.0) tested | BVA matrix already covers 0.1–0.9; added pinned `TestSegmentMutationKillers` |
+
+#### `src/stats.py` — **all 9 survivors killed**
+
+| Survivor | Mutation | Why it survived | Killer test added |
+|----------|----------|-----------------|-------------------|
+| XX-wrapped error messages (4 mutants) | `"XX…XX"` wrapping | `match=` substring inside XX | `TestStatsAnchoredMessageKillers`: `^…$` full-anchor on exact message |
+| Default `method="bonferroni"` | `"XXbonferroniXX"` | Never called without method= | `test_correct_pvalues_default_method_is_bonferroni` |
+| `r.get("method", "")` default (2 mutants) | `""` → `"XXXX"` | No record with missing key in sort | sort-order test with missing-key record |
+
+#### `src/api.py` — 56 of 67 initial survivors killed
+
+| Survivor group | Mutation | Why it survived | Killer test added |
+|----------------|----------|-----------------|-------------------|
+| `_finite_round` inf cap | `100` → `101`; `-cap` → `+cap` | No test checked exact capped value | pin `inf→100.0`, `-inf→-100.0`, `nan→0.0` |
+| Normalisation bounds | `mx > mn` → `mx >= mn` | **EQUIVALENT** (see below) | documented equivalent |
+| Overlay clip upper bound | `clip(0,255)` → `clip(0,256)` | Test image in [0,1]; `*255` never >255 | Added pixel with `image_float=1.5`; `0.6×1.5+0.4=1.3` → `*255=331.5` → clip(255) vs wrap-to-0 |
+| Error handler registration | `@errorhandler(404)` removed | No test hit the 404 route | `test_404_handler_returns_pinned_json` via bogus URL |
+| `__main__` guard | `==` → `!=`; XX-wrapped string; `None` app; wrong kwargs | runpy approach started a real Werkzeug server under mutation | replaced with `Path("src/api.py").read_text()` source-pin (never imports module) |
+| Documented equivalent (11) | See below | | |
+
+### Documented equivalent mutants
+
+| ID(s) | File | Mutation | Equivalence argument |
+|-------|------|----------|----------------------|
+| 12, 13 | `api.py` | `value > 0` → `value >= 0` inside `math.isinf` branch | `value` is always `±inf` in that branch; `inf > 0` and `inf >= 0` select the same arm |
+| 22 | `api.py` | `mx > mn` → `mx >= mn` in normalisation | Only triggers when `mx == mn` (constant array); `(arr-mn)/(mx-mn)=0/0=NaN`; `NaN.astype(uint8)==0` — identical to `zeros_like` |
+| 76 | `api.py` | `form.get("method",…)` → `get("XXmethodXX",…)` | Fallback only executes when key absent from MultiDict; `.get("method",d)` and `.get("XXmethodXX",d)` both return `d` |
+| 131–137 | `api.py` | mutations inside `if len(methods)==1 and … : pass` | Block body is `pass`; condition has no side-effects; dead code |
