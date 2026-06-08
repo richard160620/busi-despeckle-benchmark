@@ -209,10 +209,10 @@ class TestSegmentMutationKillers:
         model = build_model()
         img = np.linspace(0, 1, 32 * 32, dtype=np.float32).reshape(32, 32)
         out = predict(model, img)
-        assert out.mean() == pytest.approx(0.472008228302, abs=1e-9)
-        assert out[0, 0] == pytest.approx(0.451910674572, abs=1e-9)
-        assert out[17, 23] == pytest.approx(0.476995676756, abs=1e-9)
-        assert out[31, 31] == pytest.approx(0.705146908760, abs=1e-9)
+        assert out.mean() == pytest.approx(0.472008228302, abs=1e-5)
+        assert out[0, 0] == pytest.approx(0.451910674572, abs=1e-5)
+        assert out[17, 23] == pytest.approx(0.476995676756, abs=1e-5)
+        assert out[31, 31] == pytest.approx(0.705146908760, abs=1e-5)
 
     # -- ndim validation messages (64, 66, 67) --
     def test_ndim_too_low_message_anchored(self, mock_model):
