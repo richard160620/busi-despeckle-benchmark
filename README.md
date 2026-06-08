@@ -41,9 +41,9 @@ mutmut results
 
 | Metric | Target | Current |
 |--------|--------|---------|
-| Line coverage (`pytest --cov`) | ≥ 90 % | **97 %** (375 stmts, 12 missed) |
-| Mutation score (`mutmut run`) | ≥ 80 % | **85.5 %** (300 killed / 351 total) |
-| Total tests | ≥ 1000 | **1585** |
+| Line coverage (`pytest --cov`) | ≥ 90 % | **99 %** (419/421 stmts; only `app.run()` in `__main__` guard uncovered) |
+| Mutation score (`mutmut run`) | ≥ 80 % | **95.2 %** (687/722 killed; 96.6 % excl. 11 documented equivalents) |
+| Total tests | ≥ 1000 | **1683** |
 
 ---
 

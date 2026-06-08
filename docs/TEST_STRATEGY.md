@@ -229,7 +229,7 @@ because it returns before window validation.
 | Metric | Target | Actual |
 |--------|--------|--------|
 | Line coverage (`pytest --cov`) | ≥ 90 % | **99 %** (419/421 stmts; only `app.run()` in `__main__` guard uncovered) |
-| Mutation score (`mutmut run`) | ≥ 80 % | see README Quality Gates (run in progress) |
+| Mutation score (`mutmut run`) | ≥ 80 % | **95.2 %** (687/722 killed; 96.6 % excl. 11 documented equivalents) |
 | Total tests | ≥ 1000 | **1683** |
 
 ### How to run
