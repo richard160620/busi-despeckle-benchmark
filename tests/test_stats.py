@@ -193,3 +193,94 @@ class TestStatsMutationKillers:
         result = make_result_table(records)
         labels = [r["label"] for r in result]
         assert labels == sorted(labels)
+
+
+# ---------------------------------------------------------------------------
+# Mutation killers, round 2 — anchored on the FULL error message.
+#
+# The substring `match=` checks above (e.g. match="length", match="3") still
+# pass against XX-wrapped string-literal mutants (e.g.
+# f"XXArrays must have equal length...XX") because the substring survives
+# inside the XX markers. These tests anchor on the exact message via `^...$`
+# (or exact string equality) so the wrapper itself causes a mismatch.
+# Targets fresh mutmut survivors: 4, 7, 17, 22, 24, 28, 29, 32, 34.
+# ---------------------------------------------------------------------------
+
+class TestStatsAnchoredMessageKillers:
+    def test_length_mismatch_message_fully_anchored(self):
+        """Kill mutant 4 (XX-wrapped length-mismatch message)."""
+        with pytest.raises(
+            ValueError,
+            match=r"^Arrays must have equal length, got 4 and 3$",
+        ):
+            wilcoxon_compare([1, 2, 3, 4], [1, 2, 3])
+
+    def test_too_few_samples_message_fully_anchored(self):
+        """Kill mutant 7 (XX-wrapped too-few-samples message)."""
+        with pytest.raises(
+            ValueError,
+            match=r"^At least 4 samples required, got 3$",
+        ):
+            wilcoxon_compare([1, 2, 3], [1, 2, 3])
+
+    def test_too_few_groups_message_fully_anchored(self):
+        """Kill mutant 17 (XX-wrapped too-few-groups message)."""
+        with pytest.raises(
+            ValueError,
+            match=r"^At least 3 groups required, got 1$",
+        ):
+            friedman_test(np.ones(5))
+
+    def test_unequal_group_lengths_message_fully_anchored(self):
+        """Kill mutant 22 (XX-wrapped unequal-lengths message), pinning the
+        exact `lengths` list rendering too."""
+        with pytest.raises(
+            ValueError,
+            match=r"^All groups must have equal length, got lengths \[5, 4, 5\]$",
+        ):
+            friedman_test(np.ones(5), np.ones(4), np.ones(5))
+
+    def test_correct_pvalues_default_method_is_bonferroni(self):
+        """Kill mutant 24 (`method="bonferroni"` -> `"XXbonferroniXX"`):
+        the default value must be the real method name, so calling without
+        `method=` must succeed (an XX-wrapped default is rejected by the
+        `method not in (...)` guard and raises ValueError)."""
+        result = correct_pvalues([0.05, 0.01])
+        assert result == [pytest.approx(0.1), pytest.approx(0.02)]
+
+    def test_unsupported_method_message_fully_anchored(self):
+        """Kill mutants 28 and 29 (XX-wrapping either half of the
+        two-piece f-string): anchor on the fully concatenated message."""
+        with pytest.raises(
+            ValueError,
+            match=r"^Unsupported correction method 'bad'\. Choose 'bonferroni' or 'fdr_bh'\.$",
+        ):
+            correct_pvalues([0.05], method="bad")
+
+    def test_missing_method_key_defaults_to_empty_string_in_sort(self):
+        """Kill mutant 32 (`r.get("method", "")` -> `r.get("method", "XXXX")`).
+
+        "" sorts before "Apple" sorts before "XXXX" sorts before "lee", so a
+        record missing "method" lands first only when the default is "".
+        With the "XXXX" mutant it would land between "Apple" and "lee"."""
+        records = [
+            {"method": "Apple", "label": "x", "marker": "apple"},
+            {"method": "lee", "label": "x", "marker": "lee"},
+            {"label": "x", "marker": "missing"},
+        ]
+        result = make_result_table(records)
+        assert [r["marker"] for r in result] == ["missing", "apple", "lee"]
+
+    def test_missing_label_key_defaults_to_empty_string_in_sort(self):
+        """Kill mutant 34 (`r.get("label", "")` -> `r.get("label", "XXXX")`).
+
+        Within the same method, "" sorts before "Banana" sorts before "XXXX"
+        sorts before "zebra" — a record missing "label" lands first only
+        when the default is ""; the "XXXX" mutant would place it second."""
+        records = [
+            {"method": "none", "label": "Banana", "marker": "banana"},
+            {"method": "none", "label": "zebra", "marker": "zebra"},
+            {"method": "none", "marker": "missing"},
+        ]
+        result = make_result_table(records)
+        assert [r["marker"] for r in result] == ["missing", "banana", "zebra"]
