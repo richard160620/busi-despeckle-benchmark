@@ -6,6 +6,8 @@ Testing methods applied:
   - Boundary Value Analysis: smallest valid dataset (1 image per label)
   - Graph Coverage (W7): all edges of load_busi control-flow graph
 """
+import re
+
 import numpy as np
 import pytest
 
@@ -176,6 +178,237 @@ class TestDataMutationKillers:
                 skio.imsave(str(d / f"{label}_{i:03d}_mask.png"), mask)
         result = load_busi(root)
         assert len(result) == 9   # 3 labels × 3 images
+
+    def test_missing_root_message_is_anchored(self, tmp_path):
+        """Kill mutant: f-string 'Dataset root not found: ...' wrapped in XX markers.
+
+        `match="root"` alone is insensitive to XX-prefix/suffix mangling because
+        re.search still finds 'root' inside 'XXDataset root not found...XX'.
+        Anchoring at the start kills the mangled-string mutant.
+        """
+        with pytest.raises(FileNotFoundError, match=r"^Dataset root not found:"):
+            load_busi(tmp_path / "does_not_exist")
+
+    def test_missing_label_message_is_anchored(self, tmp_path):
+        """Kill mutant: f-string 'Missing label subdirectory: ...' wrapped in XX markers."""
+        root = tmp_path / "busi"
+        root.mkdir()
+        (root / "malignant").mkdir()
+        (root / "normal").mkdir()
+        with pytest.raises(FileNotFoundError, match=r"^Missing label subdirectory:"):
+            load_busi(root)
+
+    def test_mask_files_excluded_from_image_list(self, tmp_path):
+        """Kill mutant: '_mask' substring check mangled to 'XX_maskXX' (never matches,
+        so mask files would be treated as images too).
+
+        Chains image -> mask -> "mask of mask" so that, if mask files were wrongly
+        accepted as images, an extra spurious pair would be produced.
+        """
+        import skimage.io as skio
+
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            (root / label).mkdir(parents=True)
+
+        benign = root / "benign"
+        img = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+        mask = np.zeros((16, 16), dtype=np.uint8)
+        mask[4:12, 4:12] = 255
+        mask_of_mask = np.full((16, 16), 7, dtype=np.uint8)
+        skio.imsave(str(benign / "a.png"), img)
+        skio.imsave(str(benign / "a_mask.png"), mask)
+        skio.imsave(str(benign / "a_mask_mask.png"), mask_of_mask)
+
+        for label in ("malignant", "normal"):
+            d = root / label
+            im = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            mk = np.zeros((16, 16), dtype=np.uint8)
+            mk[4:12, 4:12] = 255
+            skio.imsave(str(d / f"{label}_001.png"), im)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mk)
+
+        result = load_busi(root)
+        benign_records = [r for r in result if r[2] == "benign"]
+        # Only 'a.png' is a real image; 'a_mask.png' must be excluded from
+        # the image list (it should only ever be loaded as a*'s mask).
+        assert len(benign_records) == 1
+
+    def test_missing_mask_skips_image_not_aborts_label(self, tmp_path):
+        """Kill mutant: continue -> break in the 'mask missing' branch.
+
+        With `continue`, an image lacking a mask is skipped and the loop moves
+        on; with `break` it would abort the whole label directory, dropping
+        images that come after it.
+        """
+        import skimage.io as skio
+
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            (root / label).mkdir(parents=True)
+
+        benign = root / "benign"
+        for name in ("a", "b", "c"):
+            img = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            skio.imsave(str(benign / f"{name}.png"), img)
+        # 'b' deliberately has no mask; 'a' and 'c' (which sorts after 'b') do.
+        for name in ("a", "c"):
+            mask = np.zeros((16, 16), dtype=np.uint8)
+            mask[4:12, 4:12] = 255
+            skio.imsave(str(benign / f"{name}_mask.png"), mask)
+
+        for label in ("malignant", "normal"):
+            d = root / label
+            im = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            mk = np.zeros((16, 16), dtype=np.uint8)
+            mk[4:12, 4:12] = 255
+            skio.imsave(str(d / f"{label}_001.png"), im)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mk)
+
+        result = load_busi(root)
+        benign_count = sum(1 for r in result if r[2] == "benign")
+        # 'continue' loads both 'a' and 'c' (skipping only 'b'); 'break' would
+        # stop at 'b' and drop 'c' too, yielding only 1.
+        assert benign_count == 2
+
+    def test_rgb_image_with_grayscale_mask_same_hw_is_accepted(self, tmp_path):
+        """Kill mutant: image.shape[:2] -> image.shape[:3] in the size check.
+
+        A 3-channel image and a single-channel mask that agree on (H, W) must
+        be accepted — the comparison only cares about the spatial dimensions.
+        Comparing shape[:3] vs shape[:2] would spuriously raise ValueError.
+        """
+        import skimage.io as skio
+
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            (root / label).mkdir(parents=True)
+
+        benign = root / "benign"
+        rgb_img = np.random.randint(0, 256, (16, 16, 3), dtype=np.uint8)
+        gray_mask = np.zeros((16, 16), dtype=np.uint8)
+        gray_mask[4:12, 4:12] = 255
+        skio.imsave(str(benign / "a.png"), rgb_img)
+        skio.imsave(str(benign / "a_mask.png"), gray_mask)
+
+        for label in ("malignant", "normal"):
+            d = root / label
+            im = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            mk = np.zeros((16, 16), dtype=np.uint8)
+            mk[4:12, 4:12] = 255
+            skio.imsave(str(d / f"{label}_001.png"), im)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mk)
+
+        result = load_busi(root)  # must not raise
+        assert any(r[2] == "benign" for r in result)
+
+    def test_grayscale_image_with_rgb_mask_same_hw_is_accepted(self, tmp_path):
+        """Kill mutant: mask.shape[:2] -> mask.shape[:3] in the size check.
+
+        Mirror of the RGB-image case: a single-channel image paired with a
+        3-channel mask that agree on (H, W) must be accepted.
+        """
+        import skimage.io as skio
+
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            (root / label).mkdir(parents=True)
+
+        benign = root / "benign"
+        gray_img = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+        rgb_mask = np.zeros((16, 16, 3), dtype=np.uint8)
+        rgb_mask[4:12, 4:12, :] = 255
+        skio.imsave(str(benign / "a.png"), gray_img)
+        skio.imsave(str(benign / "a_mask.png"), rgb_mask)
+
+        for label in ("malignant", "normal"):
+            d = root / label
+            im = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            mk = np.zeros((16, 16), dtype=np.uint8)
+            mk[4:12, 4:12] = 255
+            skio.imsave(str(d / f"{label}_001.png"), im)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mk)
+
+        result = load_busi(root)  # must not raise
+        assert any(r[2] == "benign" for r in result)
+
+    def test_size_mismatch_message_format_is_exact(self, tmp_path):
+        """Kill mutants: mismatch-message text wrapped in XX markers (prefix/suffix).
+
+        Anchors both ends of the message so a mangled 'XXImage/mask size
+        mismatch...' prefix or '...(H, W)XX' suffix fails to match.
+        """
+        import skimage.io as skio
+
+        root = _make_minimal_busi_root(tmp_path)
+        benign_dir = root / "benign"
+        masks = sorted(benign_dir.glob("*_mask.png"))
+        bad_mask = np.zeros((16, 32), dtype=np.uint8)
+        skio.imsave(str(masks[0]), bad_mask)
+        with pytest.raises(
+            ValueError,
+            match=r"^Image/mask size mismatch for .+: \(\d+, \d+\) vs \(\d+, \d+\)$",
+        ):
+            load_busi(root)
+
+    def test_size_mismatch_message_reports_2d_image_shape(self, tmp_path):
+        """Kill mutant: image.shape[:2] -> image.shape[:3] inside the message f-string.
+
+        Forces the mismatch with a 3-D (RGB) image so a [:3] slice would be
+        observably different ((H, W, 3) vs (H, W)) from the correct [:2] form.
+        """
+        import skimage.io as skio
+
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            (root / label).mkdir(parents=True)
+
+        benign = root / "benign"
+        rgb_img = np.random.randint(0, 256, (16, 16, 3), dtype=np.uint8)
+        bad_mask = np.zeros((20, 20), dtype=np.uint8)
+        bad_mask[4:12, 4:12] = 255
+        skio.imsave(str(benign / "a.png"), rgb_img)
+        skio.imsave(str(benign / "a_mask.png"), bad_mask)
+
+        for label in ("malignant", "normal"):
+            d = root / label
+            im = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            mk = np.zeros((16, 16), dtype=np.uint8)
+            mk[4:12, 4:12] = 255
+            skio.imsave(str(d / f"{label}_001.png"), im)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mk)
+
+        with pytest.raises(ValueError, match=re.escape("(16, 16) vs (20, 20)")):
+            load_busi(root)
+
+    def test_size_mismatch_message_reports_2d_mask_shape(self, tmp_path):
+        """Kill mutant: mask.shape[:2] -> mask.shape[:3] inside the message f-string.
+
+        Mirror of the image case, forcing the mismatch with a 3-D (RGB) mask.
+        """
+        import skimage.io as skio
+
+        root = tmp_path / "busi"
+        for label in ("benign", "malignant", "normal"):
+            (root / label).mkdir(parents=True)
+
+        benign = root / "benign"
+        img = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+        rgb_mask = np.zeros((20, 20, 3), dtype=np.uint8)
+        rgb_mask[4:12, 4:12, :] = 255
+        skio.imsave(str(benign / "a.png"), img)
+        skio.imsave(str(benign / "a_mask.png"), rgb_mask)
+
+        for label in ("malignant", "normal"):
+            d = root / label
+            im = np.random.randint(0, 256, (16, 16), dtype=np.uint8)
+            mk = np.zeros((16, 16), dtype=np.uint8)
+            mk[4:12, 4:12] = 255
+            skio.imsave(str(d / f"{label}_001.png"), im)
+            skio.imsave(str(d / f"{label}_001_mask.png"), mk)
+
+        with pytest.raises(ValueError, match=re.escape("(16, 16) vs (20, 20)")):
+            load_busi(root)
 
 
 def _make_minimal_busi_root(tmp_path):

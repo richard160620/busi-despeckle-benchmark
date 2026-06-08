@@ -135,6 +135,43 @@ class TestDespackleMutationKillers:
         out10 = despeckle(tiny_image_float, method="srad", n_iter=10)
         assert not np.allclose(out1, out10)
 
+    # -- W10 round 2: anchored-message + pinned-value killers (mutmut re-scope) --
+    # The loose `match="positive"/"odd"/"Unsupported"` checks above still pass
+    # against XX-wrapped string mutants (e.g. "XXwindow_size must be odd...XX")
+    # because re.search finds the substring anywhere. These anchor the regex to
+    # the start (and/or end) of the message so XX-wrapping breaks the match.
+
+    def test_non_integer_window_size_message_anchored(self, tiny_image_float):
+        """Kill mutant 9: error text for non-integer window_size, anchored at start."""
+        with pytest.raises(ValueError, match=r"^window_size must be an integer, got"):
+            despeckle(tiny_image_float, method="median", window_size=3.0)
+
+    def test_window_zero_message_fully_anchored(self, tiny_image_float):
+        """Kill mutant 12: 'positive' message must not be XX-wrapped."""
+        with pytest.raises(ValueError, match=r"^window_size must be positive, got 0$"):
+            despeckle(tiny_image_float, method="median", window_size=0)
+
+    def test_even_window_message_fully_anchored(self, tiny_image_float):
+        """Kill mutant 17: 'odd' message must not be XX-wrapped."""
+        with pytest.raises(ValueError, match=r"^window_size must be odd, got 2$"):
+            despeckle(tiny_image_float, method="median", window_size=2)
+
+    def test_unknown_method_message_fully_anchored(self, tiny_image_float):
+        """Kill mutants 20+21: both halves of the f-string-concatenated message
+        must be intact (not XX-wrapped) — anchor the whole string start..end."""
+        with pytest.raises(
+            ValueError,
+            match=r"^Unsupported despeckle method 'bogus'\. Choose from \[.*\]$",
+        ):
+            despeckle(tiny_image_float, method="bogus")
+
+    def test_srad_default_n_iter_is_10_not_11(self, tiny_image_float):
+        """Kill mutant 42: despeckle()'s `params.get("n_iter", 10)` default must
+        be 10 — calling without n_iter must match an explicit n_iter=10 run."""
+        out_default = despeckle(tiny_image_float, method="srad")
+        out_10      = despeckle(tiny_image_float, method="srad", n_iter=10)
+        np.testing.assert_array_equal(out_default, out_10)
+
 
 # ---------------------------------------------------------------------------
 # Regression tests for filter output values — kill arithmetic mutants
@@ -218,6 +255,77 @@ class TestDespeckleFilterRegressions:
         lee  = despeckle(self._IMG, method="lee",  window_size=3)
         srad = despeckle(self._IMG, method="srad", n_iter=10)
         assert not np.allclose(lee, srad)
+
+    # -- W10 round 2: crafted-image pinned-value killers --
+    # These target survivors whose mutated branch is only reachable for
+    # specific pixel statistics (exact zero/one mean, near-zero magnitude)
+    # that the seed-99 random image never produces.
+
+    def test_median_all_zero_image_stays_exactly_zero(self):
+        """Kill mutant 50 (`.clip(0, 255)` → `.clip(1, 255)`): a fully-black
+        normalized image must scale to uint8 0, not 1, before filtering —
+        any lower-bound shift makes the round-tripped output > 0."""
+        img = np.zeros((8, 8), dtype=np.float32)
+        out = despeckle(img, method="median", window_size=3)
+        assert out.mean() == pytest.approx(0.0, abs=1e-6)
+
+    def test_median_uniform_max_one_round_trips_to_one(self):
+        """Kill mutants 52 (`<= 1.0`→`< 1.0`) and 56 (same on the output-scale
+        check): a uniform image with max == 1.0 exactly must round-trip
+        through the uint8 path and back to ~1.0, not ~1/255 or ~255."""
+        img = np.ones((8, 8), dtype=np.float32)
+        out = despeckle(img, method="median", window_size=3)
+        assert out.mean() == pytest.approx(1.0, abs=1e-3)
+
+    def test_median_values_above_one_use_raw_uint8_path(self):
+        """Kill mutants 53 (`<= 1.0`→`<= 2.0`) and 57 (same on the output-scale
+        check): a uniform image with max in (1, 2] must take the *raw* uint8
+        branch (truncate, don't rescale by 255) on both checks, round-tripping
+        back to ~1.0 — not ~1/255 or ~255."""
+        img = np.full((8, 8), 1.5, dtype=np.float32)
+        out = despeckle(img, method="median", window_size=3)
+        assert out.mean() == pytest.approx(1.0, abs=1e-3)
+
+    def test_lee_filter_constant_image_has_no_nan(self):
+        """Kill mutant 75 (`denom == 0` → `denom == 1`): a perfectly uniform
+        image has local_var == noise_var == 0 everywhere, so denom == 0 and
+        the zero-guard must fire — otherwise k = 0/0 = NaN."""
+        img = np.full((8, 8), 0.5, dtype=np.float32)
+        out = despeckle(img, method="lee", window_size=3)
+        assert np.all(np.isfinite(out))
+        assert out.mean() == pytest.approx(0.5, abs=1e-4)
+
+    def test_frost_filter_unit_mean_heterogeneous_patch_pinned(self):
+        """Kill mutant 101 (`m == 0` → `m == 1`): a single bright pixel on a
+        zero background makes the 3x3 patch centred on it have mean exactly
+        1.0 *and* nonzero variance (heterogeneous). The correct code computes
+        a variance-based damping there; the mutant instead force-replaces it
+        with 1.0 — wildly different center-pixel output."""
+        img = np.zeros((9, 9), dtype=np.float64)
+        img[4, 4] = 9.0
+        out = despeckle(img, method="frost", window_size=3)
+        assert out[4, 4] == pytest.approx(8.9875013651, abs=1e-6)
+
+    def test_frost_filter_near_zero_mean_epsilon_pinned(self):
+        """Kill mutants 106 (`+ 1e-10` → `- 1e-10`) and 107 (`+ 1e-10` →
+        `+ 2e-10`) in the frost damping denominator `m**2 + eps`: a patch
+        whose mean is ~5.6e-6 makes m**2 ~ 3e-11, the same order of magnitude
+        as the epsilon, so any change to it is amplified in the output."""
+        img = np.zeros((9, 9), dtype=np.float64)
+        img[4, 4] = 5e-5
+        out = despeckle(img, method="frost", window_size=3)
+        assert out[4, 4] == pytest.approx(2.654348761277e-05, abs=1e-9)
+
+    def test_srad_filter_near_zero_values_epsilon_pinned(self):
+        """Kill mutants 176 (`+ 1e-10` → `- 1e-10`) and 177 (`+ 1e-10` →
+        `+ 2e-10`) in the SRAD `q` denominator `img**2 + eps`: pixels with
+        magnitude ~1e-5 make img**2 ~ 1e-10, the same order as the epsilon."""
+        img = np.zeros((8, 8), dtype=np.float64)
+        img[3, 3] = 1e-5
+        img[4, 4] = 2e-5
+        out = despeckle(img, method="srad", n_iter=3)
+        assert out[3, 3] == pytest.approx(4.291690624960e-06, abs=1e-12)
+        assert out[4, 4] == pytest.approx(1.198750110455e-05, abs=1e-12)
 
 
 # ===========================================================================

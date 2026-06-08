@@ -350,6 +350,74 @@ class TestMetricsMutationKillers:
         # M82 (÷ → ×) → val >> 1; M71 (filter 7→8) → val ≠ 0.9889
         assert val == pytest.approx(0.98895862, rel=1e-4)
 
+    # -- W10 round 2: anchored-message + crafted-statistics killers (mutmut re-scope) --
+
+    def test_shape_mismatch_message_fully_anchored(self):
+        """Kill mutant 2: error text must not be XX-wrapped (anchor start+end)."""
+        a, b = np.zeros((4, 4), dtype=bool), np.zeros((4, 5), dtype=bool)
+        with pytest.raises(
+            ValueError, match=r"^Shape mismatch: pred \(4, 4\) vs target \(4, 5\)$"
+        ):
+            dice(a, b)
+
+    def test_psnr_zero_data_range_fallback_handles_negative_values(self):
+        """Kill mutant 56 (`data_range = 1.0` -> `None` in psnr's zero-range
+        fallback): for non-negative images skimage auto-infers data_range=1.0
+        too (making `None` look equivalent), so use a *negative*-valued
+        constant reference — there, auto-inference resolves to 2.0 while the
+        intended fallback is 1.0, and the two diverge by ~6 dB."""
+        ref = np.full((8, 8), -0.5, dtype=np.float64)
+        img = ref.copy()
+        img[3, 3] += 0.1
+        val = psnr(img, ref)
+        assert val == pytest.approx(38.0617997398, abs=1e-4)
+
+    def test_ssim_data_range_uses_difference_not_sum(self):
+        """Kill mutant 59 (`reference.max() - reference.min()` -> `+`): the
+        existing `test_ssim_uses_max_minus_min` reference has min == 0, where
+        difference and sum coincide. Use a reference whose minimum is nonzero
+        so the two formulas diverge (diff=9.72 vs sum=29.75 -> different
+        normalisation -> different ssim score)."""
+        rng = np.random.default_rng(3)
+        ref = rng.uniform(10, 20, size=(8, 8))
+        img = ref + rng.normal(0, 0.5, size=(8, 8))
+        val = ssim(img, ref)
+        assert val == pytest.approx(0.9800432172, abs=1e-6)
+
+    def test_ssim_zero_data_range_fallback_pinned_value(self):
+        """Kill mutant 63 (`data_range = 1.0` -> `2.0` in ssim's zero-range
+        fallback): the existing loose `-1<=val<=1` check passes for either
+        constant. Pin the exact score, which is sensitive to the constant."""
+        ref = np.full((8, 8), 0.5, dtype=np.float64)
+        img = ref.copy()
+        img[3, 3] += 0.1
+        val = ssim(img, ref)
+        assert val == pytest.approx(0.815150355309362, abs=1e-6)
+
+    def test_niqe_unit_variance_image_is_not_treated_as_constant(self):
+        """Kill mutant 69 (`global_var == 0` -> `== 1`): an image with
+        variance exactly 1.0 (half 0s, half 2s) must NOT take the
+        constant-image early-return branch — it must compute a real
+        positive score from local statistics, not return 0.0."""
+        img = np.zeros((8, 8), dtype=np.float64)
+        img[:4, :] = 2.0
+        assert img.var() == pytest.approx(1.0, abs=1e-12)
+        val = niqe(img)
+        assert val > 0.0
+
+    @pytest.mark.regression
+    def test_niqe_near_zero_variance_epsilon_pinned(self):
+        """Kill mutants 83 (`+ 1e-10` -> `- 1e-10`) and 84 (`+ 1e-10` ->
+        `+ 2e-10`) in niqe's score denominator `sqrt(global_var) + eps`:
+        a smooth low-amplitude (1e-10) sinusoidal gradient makes both
+        global and local variance ~1e-21, putting sqrt(global_var) on the
+        same order as the epsilon — any change to it swings the score
+        wildly (correct≈19.15, `-eps`≈-102.3, `+2eps`≈12.0)."""
+        x = np.linspace(0, 2 * np.pi, 16)
+        grid = 0.5 + 1e-10 * np.sin(x)[:, None] * np.ones((1, 16))
+        val = niqe(grid)
+        assert val == pytest.approx(19.15050505618349, abs=1e-6)
+
 
 # ===========================================================================
 # PARAMETRIZED MATRIX — ISP W6 full expansion for metrics
